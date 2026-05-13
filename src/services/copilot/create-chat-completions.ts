@@ -2,7 +2,9 @@ import consola from "consola"
 import { events } from "fetch-event-stream"
 
 import { copilotHeaders, copilotBaseUrl } from "~/lib/api-config"
+import { copilotFetch } from "~/lib/copilot-fetch"
 import { HTTPError } from "~/lib/error"
+import { getModelPromptLimit } from "~/lib/model-limits"
 import { state } from "~/lib/state"
 
 /* eslint-disable complexity */
@@ -32,11 +34,14 @@ export const createChatCompletions = async (
     `Sending payload: ${body.length} bytes, ${payload.messages.length} messages, model: ${payload.model}`,
   )
 
-  const response = await fetch(`${copilotBaseUrl(state)}/chat/completions`, {
-    method: "POST",
-    headers,
-    body,
-  })
+  const response = await copilotFetch(
+    `${copilotBaseUrl(state)}/chat/completions`,
+    {
+      method: "POST",
+      headers,
+      body,
+    },
+  )
 
   if (!response.ok) {
     const errorBody = await response.text()
@@ -82,10 +87,7 @@ export const createChatCompletions = async (
       const estimatedTokens = Math.ceil(body.length / 4)
       const modelCaps = state.models?.data.find((m) => m.id === payload.model)
         ?.capabilities.limits
-      const modelLimit =
-        modelCaps?.max_prompt_tokens
-        ?? modelCaps?.max_context_window_tokens
-        ?? 200_000
+      const modelLimit = getModelPromptLimit(payload.model, modelCaps)
       const maxOutputTokens = payload.max_tokens ?? 0
 
       consola.warn(

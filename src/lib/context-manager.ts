@@ -22,6 +22,8 @@ import type {
 } from "~/services/copilot/create-chat-completions"
 import type { Model } from "~/services/copilot/get-models"
 
+import { getKnownModelPromptLimit } from "./model-limits"
+
 // ── Configuration ───────────────────────────────────────────────────────────
 
 /**
@@ -105,7 +107,10 @@ const IMAGE_STRIPPED_PLACEHOLDER = "[image removed to save context]"
  * MAX_PAYLOAD_BYTES alone (existing behavior, no regression).
  */
 function computeEffectiveCeiling(model: Model): number {
-  const maxPromptTokens = model.capabilities.limits.max_prompt_tokens
+  const maxPromptTokens = getKnownModelPromptLimit(
+    model.id,
+    model.capabilities.limits,
+  )
   if (!maxPromptTokens) return MAX_PAYLOAD_BYTES
   const tokenDerivedBytes = Math.floor(
     (maxPromptTokens - TOKEN_RESERVE) * CHARS_PER_TOKEN_ESTIMATE,

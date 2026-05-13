@@ -6,7 +6,12 @@ import type {
 } from "~/routes/responses/types"
 
 import { copilotBaseUrl, copilotHeaders } from "~/lib/api-config"
+import { copilotFetch } from "~/lib/copilot-fetch"
 import { HTTPError } from "~/lib/error"
+import {
+  getKnownModelPromptLimit,
+  getModelPromptLimit,
+} from "~/lib/model-limits"
 import { state } from "~/lib/state"
 
 const MAX_RESPONSES_PAYLOAD_BYTES = 5_000_000
@@ -18,6 +23,17 @@ const INPUT_DROPPED_PLACEHOLDER =
   "[older response input omitted to stay under context limit]"
 const INPUT_TRUNCATED_PREFIX =
   "[older response input truncated to stay under context limit]\n\n"
+const PRESERVED_INPUT_STRING_KEYS = new Set([
+  "call_id",
+  "id",
+  "model",
+  "name",
+  "previous_response_id",
+  "role",
+  "status",
+  "tool_call_id",
+  "type",
+])
 
 export async function createResponses(
   payload: ResponsesApiRequest,
@@ -39,7 +55,7 @@ export async function createResponses(
     `Sending responses payload: ${body.length} bytes, model: ${payload.model}`,
   )
 
-  const response = await fetch(`${copilotBaseUrl(state)}/responses`, {
+  const response = await copilotFetch(`${copilotBaseUrl(state)}/responses`, {
     method: "POST",
     headers,
     body,
@@ -57,10 +73,7 @@ export async function createResponses(
       const estimatedTokens = Math.ceil(body.length / 4)
       const modelCaps = state.models?.data.find((m) => m.id === payload.model)
         ?.capabilities.limits
-      const modelLimit =
-        modelCaps?.max_prompt_tokens
-        ?? modelCaps?.max_context_window_tokens
-        ?? 200_000
+      const modelLimit = getModelPromptLimit(payload.model, modelCaps)
       const maxOutputTokens = payload.max_output_tokens ?? 0
 
       consola.warn(
@@ -141,8 +154,8 @@ function fitResponsesPayload(
   if (currentBodyLength <= ceiling) return current
 
   const dropped = dropOldInputItems(current, ceiling)
-  current = dropped.payload
-  currentBodyLength = dropped.bodyLength
+  current = dropOrphanedToolCallOutputs(dropped.payload)
+  currentBodyLength = JSON.stringify(current).length
   if (dropped.count > 0) {
     consola.warn(
       `Responses context fit: dropped ${dropped.count} old input items (${initialBody.length} -> ${currentBodyLength} bytes)`,
@@ -157,13 +170,29 @@ function fitResponsesPayload(
     `Responses context fit: truncated input content (${initialBody.length} -> ${currentBodyLength} bytes)`,
   )
 
+  if (currentBodyLength <= ceiling) return current
+
+  current = minimizeResponsesInput(current, ceiling)
+  currentBodyLength = JSON.stringify(current).length
+  consola.warn(
+    `Responses context fit: minimized input history (${initialBody.length} -> ${currentBodyLength} bytes)`,
+  )
+
+  if (currentBodyLength <= ceiling) return current
+
+  current = truncateLargestPayloadStrings(current, ceiling)
+  currentBodyLength = JSON.stringify(current).length
+  consola.warn(
+    `Responses context fit: truncated payload strings (${initialBody.length} -> ${currentBodyLength} bytes)`,
+  )
+
   return current
 }
 
 function computeResponsesPayloadCeiling(modelId: string): number {
   const limits = state.models?.data.find((m) => m.id === modelId)?.capabilities
     .limits
-  const maxPromptTokens = limits?.max_prompt_tokens
+  const maxPromptTokens = getKnownModelPromptLimit(modelId, limits)
   if (!maxPromptTokens) return MAX_RESPONSES_PAYLOAD_BYTES
 
   const tokenDerivedBytes = Math.floor(
@@ -250,15 +279,58 @@ function dropOldInputItems(
     if (item.role === "system" || item.role === "developer") continue
     if (countRecentDroppableItems(input, index) <= 2) continue
 
-    input[index] = {
-      ...item,
-      content: INPUT_DROPPED_PLACEHOLDER,
-    }
+    input[index] = createDroppedInputItem(item)
     count++
     bodyLength = JSON.stringify({ ...payload, input }).length
   }
 
   return { bodyLength, count, payload: { ...payload, input } }
+}
+
+function createDroppedInputItem(item: ResponsesInputItem): ResponsesInputItem {
+  return {
+    role: item.role === "assistant" ? "assistant" : "user",
+    content: INPUT_DROPPED_PLACEHOLDER,
+  }
+}
+
+function dropOrphanedToolCallOutputs(
+  payload: ResponsesApiRequest,
+): ResponsesApiRequest {
+  if (typeof payload.input === "string") return payload
+
+  const callIds = new Set(
+    payload.input
+      .filter((item) => isToolCallItem(item) && item.call_id)
+      .map((item) => item.call_id),
+  )
+  let droppedCount = 0
+  const input = payload.input.map((item) => {
+    if (
+      !isToolCallOutputItem(item)
+      || !item.call_id
+      || callIds.has(item.call_id)
+    ) {
+      return item
+    }
+
+    droppedCount++
+    return createDroppedInputItem(item)
+  })
+
+  if (droppedCount === 0) return payload
+  consola.warn(
+    `Responses context fit: dropped ${droppedCount} orphaned tool call outputs`,
+  )
+  return { ...payload, input }
+}
+
+function isToolCallItem(item: ResponsesInputItem): boolean {
+  return typeof item.type === "string" && item.type.endsWith("_call")
+}
+
+function isToolCallOutputItem(item: ResponsesInputItem): boolean {
+  return typeof item.type === "string" && item.type.endsWith("_call_output")
 }
 
 function countRecentDroppableItems(
@@ -284,10 +356,10 @@ function truncateLargestInputContent(
   let bodyLength = JSON.stringify(current).length
 
   while (bodyLength > ceiling) {
-    const target = findLargestTextContent(current)
+    const target = findLargestInputString(current)
     if (!target) return current
 
-    current = truncateTextAtLocation(current, target, bodyLength - ceiling)
+    current = truncateStringAtLocation(current, target, bodyLength - ceiling)
     const nextBodyLength = JSON.stringify(current).length
     if (nextBodyLength >= bodyLength) return current
     bodyLength = nextBodyLength
@@ -296,42 +368,33 @@ function truncateLargestInputContent(
   return current
 }
 
-interface TextLocation {
-  contentIndex?: number
+interface StringLocation {
   inputIndex: number
   length: number
+  path: Array<number | string>
 }
 
-function findLargestTextContent(
+function findLargestInputString(
   payload: ResponsesApiRequest,
-): TextLocation | null {
+): StringLocation | null {
   if (typeof payload.input === "string") return null
 
-  let largest: TextLocation | null = null
+  let largest: StringLocation | null = null
   for (const [inputIndex, item] of payload.input.entries()) {
     if (item.role === "system" || item.role === "developer") continue
 
-    if (typeof item.content === "string") {
-      if (!largest || item.content.length > largest.length) {
-        largest = { inputIndex, length: item.content.length }
-      }
-      continue
-    }
-
-    for (const [contentIndex, part] of item.content.entries()) {
-      if (!part.text) continue
-      if (!largest || part.text.length > largest.length) {
-        largest = { contentIndex, inputIndex, length: part.text.length }
-      }
+    const candidate = findLargestStringInValue(item, [])
+    if (candidate && (!largest || candidate.length > largest.length)) {
+      largest = { inputIndex, ...candidate }
     }
   }
 
   return largest
 }
 
-function truncateTextAtLocation(
+function truncateStringAtLocation(
   payload: ResponsesApiRequest,
-  location: TextLocation,
+  location: StringLocation,
   excessBytes: number,
 ): ResponsesApiRequest {
   if (typeof payload.input === "string") return payload
@@ -343,26 +406,132 @@ function truncateTextAtLocation(
     location.length - excessBytes - INPUT_TRUNCATED_PREFIX.length - 10_000,
   )
 
-  if (location.contentIndex === undefined) {
-    if (typeof item.content !== "string") return payload
-    input[location.inputIndex] = {
-      ...item,
-      content: INPUT_TRUNCATED_PREFIX + item.content.slice(-keepLength),
-    }
-    return { ...payload, input }
-  }
-
-  if (!Array.isArray(item.content)) return payload
-  const content = [...item.content]
-  const part = content[location.contentIndex]
-  if (!part.text) return payload
-
-  content[location.contentIndex] = {
-    ...part,
-    text: INPUT_TRUNCATED_PREFIX + part.text.slice(-keepLength),
-  }
-  input[location.inputIndex] = { ...item, content }
+  input[location.inputIndex] = truncateStringAtPath(
+    item,
+    location.path,
+    keepLength,
+  ) as ResponsesInputItem
   return { ...payload, input }
+}
+
+interface StringCandidate {
+  length: number
+  path: Array<number | string>
+}
+
+function findLargestStringInValue(
+  value: unknown,
+  path: Array<number | string>,
+): StringCandidate | null {
+  if (typeof value === "string") {
+    const key = path.at(-1)
+    if (typeof key === "string" && PRESERVED_INPUT_STRING_KEYS.has(key)) {
+      return null
+    }
+    return { length: value.length, path }
+  }
+
+  if (Array.isArray(value)) {
+    return value.reduce<StringCandidate | null>((largest, item, index) => {
+      const candidate = findLargestStringInValue(item, [...path, index])
+      if (!candidate) return largest
+      return !largest || candidate.length > largest.length ? candidate : largest
+    }, null)
+  }
+
+  if (!isRecord(value)) return null
+
+  let largest: StringCandidate | null = null
+  for (const [key, nested] of Object.entries(value)) {
+    const candidate = findLargestStringInValue(nested, [...path, key])
+    if (candidate && (!largest || candidate.length > largest.length)) {
+      largest = candidate
+    }
+  }
+  return largest
+}
+
+function truncateStringAtPath(
+  value: unknown,
+  path: Array<number | string>,
+  keepLength: number,
+): unknown {
+  if (path.length === 0) {
+    if (typeof value !== "string") return value
+    return INPUT_TRUNCATED_PREFIX + value.slice(-keepLength)
+  }
+
+  const [head, ...tail] = path
+  if (Array.isArray(value) && typeof head === "number") {
+    const arrayValue = value as Array<unknown>
+    const next = [...arrayValue]
+    next[head] = truncateStringAtPath(next[head], tail, keepLength)
+    return next
+  }
+
+  if (isRecord(value) && typeof head === "string") {
+    return {
+      ...value,
+      [head]: truncateStringAtPath(value[head], tail, keepLength),
+    }
+  }
+
+  return value
+}
+
+function minimizeResponsesInput(
+  payload: ResponsesApiRequest,
+  ceiling: number,
+): ResponsesApiRequest {
+  if (typeof payload.input === "string") {
+    return truncateStringInput(payload, ceiling)
+  }
+
+  const protectedItems = payload.input.filter(
+    (item) => item.role === "system" || item.role === "developer",
+  )
+  const latest = [...payload.input]
+    .reverse()
+    .find((item) => item.role !== "system" && item.role !== "developer")
+
+  return {
+    ...payload,
+    input: [
+      ...protectedItems,
+      {
+        role: latest?.role === "assistant" ? "assistant" : "user",
+        content: INPUT_DROPPED_PLACEHOLDER,
+      },
+    ],
+  }
+}
+
+function truncateLargestPayloadStrings(
+  payload: ResponsesApiRequest,
+  ceiling: number,
+): ResponsesApiRequest {
+  let current = payload
+  let bodyLength = JSON.stringify(current).length
+
+  while (bodyLength > ceiling) {
+    const target = findLargestStringInValue(current, [])
+    if (!target) return current
+
+    current = truncateStringAtPath(
+      current,
+      target.path,
+      bodyLength - ceiling,
+    ) as ResponsesApiRequest
+    const nextBodyLength = JSON.stringify(current).length
+    if (nextBodyLength >= bodyLength) return current
+    bodyLength = nextBodyLength
+  }
+
+  return current
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null
 }
 
 function isContextOverflow(

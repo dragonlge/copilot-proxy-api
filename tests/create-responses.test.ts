@@ -111,6 +111,196 @@ test("drops old Responses input history when payload exceeds model token budget"
   expect(JSON.stringify(forwarded.input)).toContain("Turn 7")
 })
 
+test("drops unknown large Responses item fields from old history", async () => {
+  const payload = {
+    model: "gpt-5.5",
+    input: [
+      {
+        type: "function_call",
+        call_id: "call_old",
+        name: "read_image_batch",
+        arguments: "x".repeat(5_200_000),
+      },
+      {
+        role: "user",
+        content: "continue",
+      },
+      {
+        role: "assistant",
+        content: "ready",
+      },
+    ],
+  } as unknown as ResponsesApiRequest
+
+  const fetchMock = mock((_url: string, opts: RequestInit) => {
+    const body = bodyToString(opts.body)
+    return new Response(JSON.stringify({ id: "resp_789" }), {
+      status: body.length > 924_000 ? 413 : 200,
+      headers: { "content-type": "application/json" },
+    })
+  })
+  globalThis.fetch = fetchMock as unknown as typeof fetch
+
+  const response = await createResponses(payload)
+  const sentBody = bodyToString(fetchMock.mock.calls[0][1].body)
+  const forwarded = JSON.parse(sentBody) as ResponsesApiRequest
+
+  expect(response.status).toBe(200)
+  expect(sentBody.length).toBeLessThanOrEqual(924_000)
+  expect(JSON.stringify(forwarded.input)).not.toContain("read_image_batch")
+  expect(JSON.stringify(forwarded.input)).toContain("continue")
+})
+
+test("does not forward orphaned Responses function call outputs after fitting", async () => {
+  const payload = {
+    model: "gpt-5.5",
+    input: [
+      {
+        type: "function_call",
+        call_id: "call_old",
+        name: "read_file",
+        arguments: "{}",
+      },
+      ...Array.from({ length: 4 }, (_, index) => ({
+        role: index % 2 === 0 ? "user" : "assistant",
+        content: `Old turn ${index}\n${"x".repeat(260_000)}`,
+      })),
+      {
+        type: "function_call_output",
+        call_id: "call_old",
+        output: "file contents",
+      },
+      {
+        role: "user",
+        content: "continue",
+      },
+    ],
+  } as unknown as ResponsesApiRequest
+
+  const fetchMock = mock((_url: string, opts: RequestInit) => {
+    const body = bodyToString(opts.body)
+    const forwarded = JSON.parse(body) as ResponsesApiRequest
+    const input = Array.isArray(forwarded.input) ? forwarded.input : []
+    const callIds = new Set(
+      input
+        .filter((item) => item.type === "function_call")
+        .map((item) => item.call_id),
+    )
+    const orphanedOutput = input.find(
+      (item) =>
+        item.type === "function_call_output"
+        && item.call_id
+        && !callIds.has(item.call_id),
+    )
+
+    return new Response(
+      JSON.stringify(
+        orphanedOutput ?
+          {
+            error: {
+              message: `No tool call found for function call output with call_id ${orphanedOutput.call_id}.`,
+              code: "invalid_request_body",
+            },
+          }
+        : { id: "resp_paired" },
+      ),
+      {
+        status: orphanedOutput ? 400 : 200,
+        headers: { "content-type": "application/json" },
+      },
+    )
+  })
+  globalThis.fetch = fetchMock as unknown as typeof fetch
+
+  const response = await createResponses(payload)
+  const sentBody = bodyToString(fetchMock.mock.calls[0][1].body)
+  const forwarded = JSON.parse(sentBody) as ResponsesApiRequest
+
+  expect(response.status).toBe(200)
+  expect(sentBody.length).toBeLessThanOrEqual(924_000)
+  expect(JSON.stringify(forwarded.input)).not.toContain(
+    '"type":"function_call_output"',
+  )
+  expect(JSON.stringify(forwarded.input)).toContain(
+    "older response input omitted to stay under context limit",
+  )
+})
+
+test("does not forward orphaned Responses custom tool call outputs after fitting", async () => {
+  const payload = {
+    model: "gpt-5.5",
+    input: [
+      {
+        type: "custom_tool_call",
+        call_id: "call_custom_old",
+        name: "browser_open",
+        input: "https://example.com",
+      },
+      ...Array.from({ length: 4 }, (_, index) => ({
+        role: index % 2 === 0 ? "user" : "assistant",
+        content: `Old custom turn ${index}\n${"x".repeat(260_000)}`,
+      })),
+      {
+        type: "custom_tool_call_output",
+        call_id: "call_custom_old",
+        output: "opened",
+      },
+      {
+        role: "user",
+        content: "continue",
+      },
+    ],
+  } as unknown as ResponsesApiRequest
+
+  const fetchMock = mock((_url: string, opts: RequestInit) => {
+    const body = bodyToString(opts.body)
+    const forwarded = JSON.parse(body) as ResponsesApiRequest
+    const input = Array.isArray(forwarded.input) ? forwarded.input : []
+    const callIds = new Set(
+      input
+        .filter((item) => item.type === "custom_tool_call")
+        .map((item) => item.call_id),
+    )
+    const orphanedOutput = input.find(
+      (item) =>
+        item.type === "custom_tool_call_output"
+        && item.call_id
+        && !callIds.has(item.call_id),
+    )
+
+    return new Response(
+      JSON.stringify(
+        orphanedOutput ?
+          {
+            error: {
+              message: `No tool call found for custom tool call output with call_id ${orphanedOutput.call_id}.`,
+              code: "invalid_request_body",
+            },
+          }
+        : { id: "resp_custom_paired" },
+      ),
+      {
+        status: orphanedOutput ? 400 : 200,
+        headers: { "content-type": "application/json" },
+      },
+    )
+  })
+  globalThis.fetch = fetchMock as unknown as typeof fetch
+
+  const response = await createResponses(payload)
+  const sentBody = bodyToString(fetchMock.mock.calls[0][1].body)
+  const forwarded = JSON.parse(sentBody) as ResponsesApiRequest
+
+  expect(response.status).toBe(200)
+  expect(sentBody.length).toBeLessThanOrEqual(924_000)
+  expect(JSON.stringify(forwarded.input)).not.toContain(
+    '"type":"custom_tool_call_output"',
+  )
+  expect(JSON.stringify(forwarded.input)).toContain(
+    "older response input omitted to stay under context limit",
+  )
+})
+
 test("maps remaining upstream Responses 413 to prompt-too-long error", async () => {
   const payload: ResponsesApiRequest = {
     model: "gpt-5.5",

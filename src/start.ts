@@ -6,6 +6,7 @@ import consola from "consola"
 import { serve, type ServerHandler } from "srvx"
 import invariant from "tiny-invariant"
 
+import { parseLocalApiKeys } from "./lib/local-auth"
 import { ensurePaths } from "./lib/paths"
 import { initProxyFromEnv } from "./lib/proxy"
 import { generateEnvScript } from "./lib/shell"
@@ -25,6 +26,7 @@ interface RunServerOptions {
   claudeCode: boolean
   showToken: boolean
   proxyEnv: boolean
+  apiKey?: string
 }
 
 export async function runServer(options: RunServerOptions): Promise<void> {
@@ -46,14 +48,20 @@ export async function runServer(options: RunServerOptions): Promise<void> {
   state.rateLimitSeconds = options.rateLimit
   state.rateLimitWait = options.rateLimitWait
   state.showToken = options.showToken
-
-  await ensurePaths()
-  await cacheVSCodeVersion()
+  state.localApiKeys = parseLocalApiKeys(options.apiKey)
+  if (state.localApiKeys.length > 0) {
+    consola.info("Local API-key auth enabled")
+  }
 
   if (options.githubToken) {
     state.githubToken = options.githubToken
     consola.info("Using provided GitHub token")
-  } else {
+  }
+
+  await ensurePaths()
+  await cacheVSCodeVersion()
+
+  if (!options.githubToken) {
     await setupGitHubToken()
   }
 
@@ -190,6 +198,11 @@ export const start = defineCommand({
       default: false,
       description: "Initialize proxy from environment variables",
     },
+    "api-key": {
+      type: "string",
+      description:
+        "Require one of these comma-separated local API keys for proxy routes",
+    },
   },
   run({ args }) {
     const rateLimitRaw = args["rate-limit"]
@@ -207,6 +220,7 @@ export const start = defineCommand({
       claudeCode: args["claude-code"],
       showToken: args["show-token"],
       proxyEnv: args["proxy-env"],
+      apiKey: args["api-key"],
     })
   },
 })

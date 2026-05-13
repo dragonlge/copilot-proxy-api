@@ -83,15 +83,38 @@ export function translateResponsesToChat(
 }
 
 function translateInputItem(item: ResponsesInputItem): Message | null {
-  // Handle tool_result type
-  if (item.type === "tool_result" && item.tool_call_id) {
+  if (item.type === "function_call" && item.call_id && item.name) {
     return {
-      role: "tool",
-      tool_call_id: item.tool_call_id,
-      content:
-        item.output ?? (typeof item.content === "string" ? item.content : ""),
+      role: "assistant",
+      content: null,
+      tool_calls: [
+        {
+          id: item.call_id,
+          type: "function",
+          function: {
+            name: item.name,
+            arguments: item.arguments ?? "{}",
+          },
+        },
+      ],
     }
   }
+
+  // Handle tool_result type
+  if (
+    (item.type === "tool_result" && item.tool_call_id)
+    || (item.type === "function_call_output" && item.call_id)
+  ) {
+    const content = translateToolOutput(item.output ?? item.content)
+    return {
+      role: "tool",
+      tool_call_id: item.tool_call_id ?? item.call_id,
+      content,
+    }
+  }
+
+  if (item.type === "reasoning" || item.type === "compaction") return null
+  if (!isMessageRole(item.role)) return null
 
   // Handle regular message
   const content = translateContent(item.content)
@@ -106,21 +129,62 @@ function translateInputItem(item: ResponsesInputItem): Message | null {
   }
 }
 
+function isMessageRole(
+  role: ResponsesInputItem["role"],
+): role is "system" | "user" | "assistant" | "developer" {
+  return (
+    role === "system"
+    || role === "user"
+    || role === "assistant"
+    || role === "developer"
+  )
+}
+
+function translateToolOutput(
+  output: string | Array<ResponsesContentPart> | undefined,
+): string {
+  const content = translateContent(output)
+  if (typeof content === "string") return content
+  if (!Array.isArray(content)) return ""
+  return content
+    .filter(
+      (part): part is ContentPart & { type: "text" } => part.type === "text",
+    )
+    .map((part) => part.text)
+    .join("\n")
+}
+
 function translateContent(
   content: string | Array<ResponsesContentPart> | undefined,
 ): string | Array<ContentPart> | null {
   if (!content) return null
   if (typeof content === "string") return content
 
-  const textParts = content
-    .filter(
-      (part): part is ResponsesContentPart & { text: string } =>
-        (part.type === "input_text" || part.type === "output_text")
-        && Boolean(part.text),
-    )
-    .map((part) => part.text)
+  const parts: Array<ContentPart> = []
+  for (const part of content) {
+    if (
+      (part.type === "input_text" || part.type === "output_text")
+      && part.text
+    ) {
+      parts.push({ type: "text", text: part.text })
+    }
 
-  return textParts.length > 0 ? textParts.join("\n") : null
+    if (part.type === "input_image" && part.image_url) {
+      parts.push({
+        type: "image_url",
+        image_url: {
+          url: part.image_url,
+          detail: part.detail,
+        },
+      })
+    }
+  }
+
+  if (parts.length === 0) return null
+  if (parts.every((part) => part.type === "text")) {
+    return parts.map((part) => part.text).join("\n")
+  }
+  return parts
 }
 
 function translateTools(

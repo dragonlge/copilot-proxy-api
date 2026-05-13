@@ -31,12 +31,33 @@ import {
  *  (CLAUDE_STREAM_IDLE_TIMEOUT_MS); 15s gives a 6× safety margin. */
 const PING_INTERVAL_MS = 15_000
 
+type SSEStream = Parameters<Parameters<typeof streamSSE>[1]>[0]
+type ChatCompletionStream = Exclude<
+  Awaited<ReturnType<typeof createChatCompletions>>,
+  ChatCompletionResponse
+>
+
+interface ChatCompletionFlowOptions {
+  clientModel: string
+  requestId: string
+}
+
+interface ChatCompletionStreamOptions extends ChatCompletionFlowOptions {
+  response: ChatCompletionStream
+  streamState: AnthropicStreamState
+}
+
+interface StreamCleanupOptions {
+  error: unknown
+  requestId: string
+  streamState: AnthropicStreamState
+}
+
 function generateRequestId(): string {
   // RFC 4122 v4-ish; sufficient for response correlation.
   return `req_${crypto.randomUUID().replaceAll("-", "")}`
 }
 
-// eslint-disable-next-line max-lines-per-function
 export async function handleCompletion(c: Context) {
   await checkRateLimit(state)
 
@@ -61,10 +82,21 @@ export async function handleCompletion(c: Context) {
   // Async preprocessing: PDF document block extraction, etc.
   const preprocessed = await preprocessAnthropicPayload(anthropicPayload)
 
-  const openAIPayload = translateToOpenAI(preprocessed)
+  return await handleChatCompletions(c, preprocessed, {
+    clientModel,
+    requestId,
+  })
+}
+
+async function handleChatCompletions(
+  c: Context,
+  payload: AnthropicMessagesPayload,
+  options: ChatCompletionFlowOptions,
+) {
+  const openAIPayload = translateToOpenAI(payload)
   if (consola.level >= 4) {
     consola.debug(
-      `[${requestId}] Translated OpenAI request payload:`,
+      `[${options.requestId}] Translated OpenAI request payload:`,
       JSON.stringify(openAIPayload),
     )
   }
@@ -75,7 +107,7 @@ export async function handleCompletion(c: Context) {
 
   if (fittedPayload.messages.length !== openAIPayload.messages.length) {
     consola.info(
-      `[${requestId}] Context management: ${openAIPayload.messages.length} → ${fittedPayload.messages.length} messages`,
+      `[${options.requestId}] Context management: ${openAIPayload.messages.length} → ${fittedPayload.messages.length} messages`,
     )
   }
 
@@ -86,47 +118,64 @@ export async function handleCompletion(c: Context) {
   const response = await createChatCompletions(fittedPayload)
 
   if (isNonStreaming(response)) {
-    if (consola.level >= 4) {
-      consola.debug(
-        `[${requestId}] Non-streaming response from Copilot:`,
-        JSON.stringify(response).slice(-400),
-      )
-    }
-    // Wrap translation in try/catch — translateToAnthropic invokes
-    // JSON.parse on tool_call.function.arguments which can throw on
-    // malformed Copilot output and would otherwise surface as an
-    // unhandled 500 with no Anthropic-shaped body.
-    try {
-      const anthropicResponse = translateToAnthropic(response, clientModel)
-      if (consola.level >= 4) {
-        consola.debug(
-          `[${requestId}] Translated Anthropic response:`,
-          JSON.stringify(anthropicResponse),
-        )
-      }
-      return c.json(anthropicResponse)
-    } catch (error) {
-      consola.error(
-        `[${requestId}] Failed to translate non-streaming response:`,
-        error,
-      )
-      return c.json(
-        {
-          type: "error" as const,
-          error: {
-            type: "api_error",
-            message:
-              error instanceof Error ?
-                `Translation failed: ${error.message}`
-              : "Translation failed",
-          },
-        },
-        500,
-      )
-    }
+    return handleNonStreamingChatCompletion(c, response, options)
   }
 
-  consola.debug(`[${requestId}] Streaming response from Copilot`)
+  consola.debug(`[${options.requestId}] Streaming response from Copilot`)
+  return handleStreamingChatCompletion(c, response, options)
+}
+
+function handleNonStreamingChatCompletion(
+  c: Context,
+  response: ChatCompletionResponse,
+  options: ChatCompletionFlowOptions,
+) {
+  if (consola.level >= 4) {
+    consola.debug(
+      `[${options.requestId}] Non-streaming response from Copilot:`,
+      JSON.stringify(response).slice(-400),
+    )
+  }
+
+  try {
+    const anthropicResponse = translateToAnthropic(
+      response,
+      options.clientModel,
+    )
+    if (consola.level >= 4) {
+      consola.debug(
+        `[${options.requestId}] Translated Anthropic response:`,
+        JSON.stringify(anthropicResponse),
+      )
+    }
+    return c.json(anthropicResponse)
+  } catch (error) {
+    return c.json(createTranslationErrorBody(error, options.requestId), 500)
+  }
+}
+
+function createTranslationErrorBody(error: unknown, requestId: string) {
+  consola.error(
+    `[${requestId}] Failed to translate non-streaming response:`,
+    error,
+  )
+  return {
+    type: "error" as const,
+    error: {
+      type: "api_error",
+      message:
+        error instanceof Error ?
+          `Translation failed: ${error.message}`
+        : "Translation failed",
+    },
+  }
+}
+
+function handleStreamingChatCompletion(
+  c: Context,
+  response: ChatCompletionStream,
+  options: ChatCompletionFlowOptions,
+) {
   return streamSSE(c, async (stream) => {
     const streamState: AnthropicStreamState = {
       messageStartSent: false,
@@ -135,110 +184,130 @@ export async function handleCompletion(c: Context) {
       toolCalls: {},
     }
 
-    // Heartbeat — write SSE comment lines every PING_INTERVAL_MS so
-    // Claude Code's 90s idle watchdog doesn't tear down slow streams.
-    // Anthropic uses `event: ping` for this; we emit both the structured
-    // event and a plain comment for maximum compatibility.
-    let pingTimer: ReturnType<typeof setInterval> | undefined
-    const startPings = () => {
-      pingTimer = setInterval(() => {
-        // Best-effort — failures here are non-fatal; the next event will surface
-        // any closed-stream condition.
-        void stream
-          .writeSSE({ event: "ping", data: JSON.stringify({ type: "ping" }) })
-          .catch(() => {})
-      }, PING_INTERVAL_MS)
-    }
-    const stopPings = () => {
-      if (pingTimer) clearInterval(pingTimer)
-      pingTimer = undefined
-    }
-
-    startPings()
+    const stopPings = startPings(stream)
 
     try {
-      for await (const rawEvent of response) {
-        if (rawEvent.data === "[DONE]") {
-          break
-        }
-
-        if (!rawEvent.data) {
-          continue
-        }
-
-        let chunk: ChatCompletionChunk
-        try {
-          chunk = JSON.parse(rawEvent.data) as ChatCompletionChunk
-        } catch (parseError) {
-          consola.warn(
-            `[${requestId}] Skipping unparseable Copilot chunk:`,
-            parseError,
-          )
-          continue
-        }
-
-        // Echo client-requested model in the message_start event.
-        if (!streamState.messageStartSent) {
-          chunk.model = clientModel
-        }
-
-        const events = translateChunkToAnthropicEvents(chunk, streamState)
-
-        for (const event of events) {
-          await stream.writeSSE({
-            event: event.type,
-            data: JSON.stringify(event),
-          })
-        }
-      }
+      await forwardChatCompletionStream(stream, {
+        ...options,
+        response,
+        streamState,
+      })
     } catch (error) {
-      consola.error(`[${requestId}] Streaming error:`, error)
-
-      // Clean up open content blocks so Claude Code's content_block index
-      // tracker doesn't throw "Content block not found".
-      try {
-        if (streamState.contentBlockOpen) {
-          await stream.writeSSE({
-            event: "content_block_stop",
-            data: JSON.stringify({
-              type: "content_block_stop",
-              index: streamState.contentBlockIndex,
-            }),
-          })
-          streamState.contentBlockOpen = false
-        }
-
-        if (streamState.messageStartSent) {
-          await stream.writeSSE({
-            event: "message_delta",
-            data: JSON.stringify({
-              type: "message_delta",
-              delta: { stop_reason: "end_turn", stop_sequence: null },
-              usage: { output_tokens: 0 },
-            }),
-          })
-          await stream.writeSSE({
-            event: "message_stop",
-            data: JSON.stringify({ type: "message_stop" }),
-          })
-        }
-
-        const errorEvent = translateErrorToAnthropicErrorEvent(
-          error instanceof Error ? error.message : undefined,
-        )
-        await stream.writeSSE({
-          event: "error",
-          data: JSON.stringify(errorEvent),
-        })
-      } catch (cleanupError) {
-        consola.error(
-          `[${requestId}] Failed to emit stream cleanup events:`,
-          cleanupError,
-        )
-      }
+      await emitStreamErrorCleanup(stream, {
+        error,
+        requestId: options.requestId,
+        streamState,
+      })
     } finally {
       stopPings()
     }
+  })
+}
+
+function startPings(stream: SSEStream): () => void {
+  const pingTimer = setInterval(() => {
+    void stream
+      .writeSSE({ event: "ping", data: JSON.stringify({ type: "ping" }) })
+      .catch(() => {})
+  }, PING_INTERVAL_MS)
+
+  return () => clearInterval(pingTimer)
+}
+
+async function forwardChatCompletionStream(
+  stream: SSEStream,
+  options: ChatCompletionStreamOptions,
+) {
+  for await (const rawEvent of options.response) {
+    if (rawEvent.data === "[DONE]") break
+    if (!rawEvent.data) continue
+
+    const chunk = parseChatCompletionChunk(rawEvent.data, options.requestId)
+    if (!chunk) continue
+
+    if (!options.streamState.messageStartSent) chunk.model = options.clientModel
+
+    for (const event of translateChunkToAnthropicEvents(
+      chunk,
+      options.streamState,
+    )) {
+      await stream.writeSSE({ event: event.type, data: JSON.stringify(event) })
+    }
+  }
+}
+
+function parseChatCompletionChunk(
+  data: string,
+  requestId: string,
+): ChatCompletionChunk | null {
+  try {
+    return JSON.parse(data) as ChatCompletionChunk
+  } catch (parseError) {
+    consola.warn(
+      `[${requestId}] Skipping unparseable Copilot chunk:`,
+      parseError,
+    )
+    return null
+  }
+}
+
+async function emitStreamErrorCleanup(
+  stream: SSEStream,
+  options: StreamCleanupOptions,
+) {
+  consola.error(`[${options.requestId}] Streaming error:`, options.error)
+
+  try {
+    await closeOpenContentBlock(stream, options.streamState)
+    await closeStartedMessage(stream, options.streamState)
+    await stream.writeSSE({
+      event: "error",
+      data: JSON.stringify(
+        translateErrorToAnthropicErrorEvent(
+          options.error instanceof Error ? options.error.message : undefined,
+        ),
+      ),
+    })
+  } catch (cleanupError) {
+    consola.error(
+      `[${options.requestId}] Failed to emit stream cleanup events:`,
+      cleanupError,
+    )
+  }
+}
+
+async function closeOpenContentBlock(
+  stream: SSEStream,
+  streamState: AnthropicStreamState,
+) {
+  if (!streamState.contentBlockOpen) return
+
+  await stream.writeSSE({
+    event: "content_block_stop",
+    data: JSON.stringify({
+      type: "content_block_stop",
+      index: streamState.contentBlockIndex,
+    }),
+  })
+}
+
+async function closeStartedMessage(
+  stream: SSEStream,
+  streamState: AnthropicStreamState,
+) {
+  if (!streamState.messageStartSent) return
+
+  await stream.writeSSE({
+    event: "message_delta",
+    data: JSON.stringify({
+      type: "message_delta",
+      delta: { stop_reason: "end_turn", stop_sequence: null },
+      usage: { output_tokens: 0 },
+    }),
+  })
+  await stream.writeSSE({
+    event: "message_stop",
+    data: JSON.stringify({ type: "message_stop" }),
   })
 }
 
