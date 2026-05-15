@@ -31,7 +31,9 @@ export interface ResponsesApiRequest {
   input: string | Array<ResponsesInputItem>
   instructions?: string | null
   tools?: Array<ResponsesTool>
-  tool_choice?: string | { type: string; function?: { name: string } }
+  tool_choice?:
+    | string
+    | { type: string; function?: { name: string }; name?: string }
   parallel_tool_calls?: boolean
   max_output_tokens?: number | null
   temperature?: number | null

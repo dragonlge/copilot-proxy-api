@@ -19,6 +19,8 @@ const CHARS_PER_TOKEN_ESTIMATE = 3.5
 const TOKEN_RESERVE = 8_000
 const IMAGE_STRIPPED_PLACEHOLDER =
   "[image removed to stay under upstream payload limit]"
+const INVALID_OUTPUT_IMAGE_PLACEHOLDER =
+  "[image output removed because its URL is not valid for Copilot Responses]"
 const INPUT_DROPPED_PLACEHOLDER =
   "[older response input omitted to stay under context limit]"
 const INPUT_TRUNCATED_PREFIX =
@@ -556,7 +558,7 @@ function isContextOverflow(
 function sanitizeResponsesPayload(
   payload: ResponsesApiRequest,
 ): ResponsesApiRequest {
-  const sanitized: ResponsesApiRequest = { ...payload }
+  const sanitized: ResponsesApiRequest = sanitizeInvalidOutputImages(payload)
 
   // Codex sends ChatGPT-only fast mode metadata; Copilot Responses rejects it.
   delete (sanitized as ResponsesApiRequest & { service_tier?: unknown })
@@ -569,6 +571,54 @@ function sanitizeResponsesPayload(
   return {
     ...sanitized,
     tools: sanitized.tools.filter((tool) => tool.type !== "image_generation"),
+  }
+}
+
+function sanitizeInvalidOutputImages(
+  payload: ResponsesApiRequest,
+): ResponsesApiRequest {
+  if (typeof payload.input === "string") return payload
+
+  let input: Array<ResponsesInputItem> | undefined
+  for (const [index, item] of payload.input.entries()) {
+    if (!Array.isArray(item.output)) continue
+
+    const sanitizedOutput = sanitizeOutputParts(item.output)
+    if (sanitizedOutput === item.output) continue
+
+    input ??= [...payload.input]
+    input[index] = { ...item, output: sanitizedOutput }
+  }
+
+  return input ? { ...payload, input } : payload
+}
+
+function sanitizeOutputParts(
+  output: NonNullable<ResponsesInputItem["output"]>,
+): ResponsesInputItem["output"] {
+  if (typeof output === "string") return output
+  if (!output.some((part) => hasInvalidImageUrl(part))) return output
+
+  return output.map((part) =>
+    hasInvalidImageUrl(part) ?
+      {
+        type: "output_text",
+        text: INVALID_OUTPUT_IMAGE_PLACEHOLDER,
+      }
+    : part,
+  )
+}
+
+function hasInvalidImageUrl(part: { image_url?: string | null }): boolean {
+  return typeof part.image_url === "string" && !isValidUrl(part.image_url)
+}
+
+function isValidUrl(value: string): boolean {
+  try {
+    new URL(value)
+    return true
+  } catch {
+    return false
   }
 }
 

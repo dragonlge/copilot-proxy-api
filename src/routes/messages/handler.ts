@@ -3,6 +3,9 @@ import type { Context } from "hono"
 import consola from "consola"
 import { streamSSE } from "hono/streaming"
 
+import type { ResponsesApiResponse } from "~/routes/responses/types"
+import type { Model } from "~/services/copilot/get-models"
+
 import { awaitApproval } from "~/lib/approval"
 import { fitContext } from "~/lib/context-manager"
 import { checkRateLimit } from "~/lib/rate-limit"
@@ -10,8 +13,10 @@ import { state } from "~/lib/state"
 import {
   createChatCompletions,
   type ChatCompletionChunk,
+  type ChatCompletionsPayload,
   type ChatCompletionResponse,
 } from "~/services/copilot/create-chat-completions"
+import { createResponses } from "~/services/copilot/create-responses"
 
 import {
   type AnthropicMessagesPayload,
@@ -23,6 +28,11 @@ import {
   translateToOpenAI,
 } from "./non-stream-translation"
 import {
+  translateAnthropicMessagesToResponses,
+  translateResponsesToAnthropicMessage,
+  writeResponsesAsAnthropicStream,
+} from "./responses-bridge"
+import {
   translateChunkToAnthropicEvents,
   translateErrorToAnthropicErrorEvent,
 } from "./stream-translation"
@@ -30,6 +40,8 @@ import {
 /** Heartbeat interval for SSE keepalive. Claude Code's idle timeout is 90s
  *  (CLAUDE_STREAM_IDLE_TIMEOUT_MS); 15s gives a 6× safety margin. */
 const PING_INTERVAL_MS = 15_000
+const CHAT_COMPLETIONS_ENDPOINT = "/chat/completions"
+const RESPONSES_ENDPOINT = "/responses"
 
 type SSEStream = Parameters<Parameters<typeof streamSSE>[1]>[0]
 type ChatCompletionStream = Exclude<
@@ -40,6 +52,10 @@ type ChatCompletionStream = Exclude<
 interface ChatCompletionFlowOptions {
   clientModel: string
   requestId: string
+}
+
+interface ResponsesFlowOptions extends ChatCompletionFlowOptions {
+  model: string
 }
 
 interface ChatCompletionStreamOptions extends ChatCompletionFlowOptions {
@@ -81,8 +97,18 @@ export async function handleCompletion(c: Context) {
 
   // Async preprocessing: PDF document block extraction, etc.
   const preprocessed = await preprocessAnthropicPayload(anthropicPayload)
+  const openAIPayload = translateToOpenAI(preprocessed)
+  const model = state.models?.data.find((m) => m.id === openAIPayload.model)
 
-  return await handleChatCompletions(c, preprocessed, {
+  if (shouldUseResponsesForMessages(model)) {
+    return await handleResponsesMessages(c, preprocessed, {
+      clientModel,
+      model: openAIPayload.model,
+      requestId,
+    })
+  }
+
+  return await handleChatCompletions(c, openAIPayload, {
     clientModel,
     requestId,
   })
@@ -90,10 +116,9 @@ export async function handleCompletion(c: Context) {
 
 async function handleChatCompletions(
   c: Context,
-  payload: AnthropicMessagesPayload,
+  openAIPayload: ChatCompletionsPayload,
   options: ChatCompletionFlowOptions,
 ) {
-  const openAIPayload = translateToOpenAI(payload)
   if (consola.level >= 4) {
     consola.debug(
       `[${options.requestId}] Translated OpenAI request payload:`,
@@ -123,6 +148,55 @@ async function handleChatCompletions(
 
   consola.debug(`[${options.requestId}] Streaming response from Copilot`)
   return handleStreamingChatCompletion(c, response, options)
+}
+
+async function handleResponsesMessages(
+  c: Context,
+  payload: AnthropicMessagesPayload,
+  options: ResponsesFlowOptions,
+) {
+  if (state.manualApprove) {
+    await awaitApproval()
+  }
+
+  const responsesPayload = translateAnthropicMessagesToResponses(
+    payload,
+    options.model,
+  )
+
+  if (payload.stream) {
+    return streamSSE(c, async (stream) => {
+      const stopPings = startPings(stream)
+      try {
+        const response = await createResponses(responsesPayload)
+        const body = (await response.json()) as ResponsesApiResponse
+        await writeResponsesAsAnthropicStream(stream, body, options.clientModel)
+      } catch (error) {
+        await stream.writeSSE({
+          event: "error",
+          data: JSON.stringify(
+            translateErrorToAnthropicErrorEvent(
+              error instanceof Error ? error.message : undefined,
+            ),
+          ),
+        })
+      } finally {
+        stopPings()
+      }
+    })
+  }
+
+  const response = await createResponses(responsesPayload)
+  const body = (await response.json()) as ResponsesApiResponse
+  return c.json(translateResponsesToAnthropicMessage(body, options.clientModel))
+}
+
+function shouldUseResponsesForMessages(model: Model | undefined): boolean {
+  if (!model?.supported_endpoints) return false
+  return (
+    model.supported_endpoints.includes(RESPONSES_ENDPOINT)
+    && !model.supported_endpoints.includes(CHAT_COMPLETIONS_ENDPOINT)
+  )
 }
 
 function handleNonStreamingChatCompletion(
