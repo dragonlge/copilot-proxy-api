@@ -2,6 +2,7 @@ import consola from "consola"
 
 import type {
   ResponsesApiRequest,
+  ResponsesContentPart,
   ResponsesInputItem,
 } from "~/routes/responses/types"
 
@@ -597,26 +598,54 @@ function sanitizeOutputParts(
   output: NonNullable<ResponsesInputItem["output"]>,
 ): ResponsesInputItem["output"] {
   if (typeof output === "string") return output
-  if (!output.some((part) => hasInvalidImageUrl(part))) return output
 
-  return output.map((part) =>
-    hasInvalidImageUrl(part) ?
-      {
-        type: "output_text",
-        text: INVALID_OUTPUT_IMAGE_PLACEHOLDER,
-      }
-    : part,
-  )
+  const sanitizedOutput = output.map((part) => sanitizeOutputPart(part))
+  const changed = sanitizedOutput.some((part, index) => part !== output[index])
+
+  return changed ? sanitizedOutput : output
 }
 
-function hasInvalidImageUrl(part: { image_url?: string | null }): boolean {
-  return typeof part.image_url === "string" && !isValidUrl(part.image_url)
+function sanitizeOutputPart(part: ResponsesContentPart): ResponsesContentPart {
+  if (hasInvalidImageUrl(part)) {
+    return {
+      type: "input_text",
+      text: INVALID_OUTPUT_IMAGE_PLACEHOLDER,
+    }
+  }
+
+  if (typeof part.image_url === "string" && part.type !== "input_image") {
+    return {
+      type: "input_image",
+      image_url: part.image_url,
+      detail: part.detail,
+    }
+  }
+
+  if (part.type === "output_text") {
+    return {
+      type: "input_text",
+      text: part.text ?? "",
+    }
+  }
+
+  return part
 }
 
-function isValidUrl(value: string): boolean {
+function hasInvalidImageUrl(part: { image_url?: unknown }): boolean {
+  if (
+    !("image_url" in part)
+    || part.image_url === null
+    || part.image_url === undefined
+  ) {
+    return false
+  }
+  return typeof part.image_url !== "string" || !isValidHttpUrl(part.image_url)
+}
+
+function isValidHttpUrl(value: string): boolean {
   try {
-    new URL(value)
-    return true
+    const url = new URL(value)
+    return url.protocol === "http:" || url.protocol === "https:"
   } catch {
     return false
   }
