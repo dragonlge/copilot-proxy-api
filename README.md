@@ -1,4 +1,4 @@
-# Copilot API Proxy
+# Copilot API Proxy for Claude Code and Codex
 
 > [!WARNING]
 > This is a reverse-engineered proxy of GitHub Copilot API. It is not supported by GitHub, and may break unexpectedly. Use at your own risk.
