@@ -32,11 +32,13 @@ import { mapOpenAIStopReasonToAnthropic } from "./utils"
 export function translateToOpenAI(
   payload: AnthropicMessagesPayload,
 ): ChatCompletionsPayload {
-  const messages = stripTrailingAssistantPrefill(payload.messages)
+  const messages = stripTrailingAssistantPrefill(
+    translateAnthropicMessagesToOpenAI(payload.messages, payload.system),
+  )
 
   return {
     model: translateModelName(payload.model),
-    messages: translateAnthropicMessagesToOpenAI(messages, payload.system),
+    messages,
     max_tokens: payload.max_tokens,
     stop: payload.stop_sequences,
     stream: payload.stream,
@@ -50,8 +52,8 @@ export function translateToOpenAI(
 }
 
 function stripTrailingAssistantPrefill(
-  messages: Array<AnthropicMessage>,
-): Array<AnthropicMessage> {
+  messages: Array<Message>,
+): Array<Message> {
   let end = messages.length
   while (end > 0 && messages[end - 1].role === "assistant") {
     end--

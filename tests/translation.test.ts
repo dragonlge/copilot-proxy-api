@@ -482,6 +482,63 @@ describe("translateToOpenAI (request side)", () => {
   })
 })
 
+describe("translateToOpenAI (trailing assistant prefill stripping)", () => {
+  test("strips a literal trailing assistant (prefill) message", () => {
+    const payload: AnthropicMessagesPayload = {
+      model: "claude-opus-4-5",
+      max_tokens: 100,
+      messages: [
+        { role: "user", content: "what is 2+2" },
+        { role: "assistant", content: "The answer is" },
+      ],
+    }
+    const result = translateToOpenAI(payload)
+    expect(result.messages.at(-1)!.role).not.toBe("assistant")
+    expect(result.messages.filter((m) => m.role === "assistant")).toHaveLength(
+      0,
+    )
+  })
+
+  test("strips assistant tail produced when a trailing user turn translates to nothing", () => {
+    const payload: AnthropicMessagesPayload = {
+      model: "claude-opus-4-5",
+      max_tokens: 100,
+      messages: [
+        { role: "user", content: "what is 2+2" },
+        { role: "assistant", content: "4" },
+        // Trailing user turn with empty content -> contributes no OpenAI
+        // message, which would otherwise leave the assistant turn as the tail.
+        { role: "user", content: [] },
+      ],
+    }
+    const result = translateToOpenAI(payload)
+    expect(result.messages.at(-1)!.role).not.toBe("assistant")
+  })
+
+  test("strips a trailing assistant tool_call (prefill) turn", () => {
+    const payload: AnthropicMessagesPayload = {
+      model: "claude-opus-4-5",
+      max_tokens: 100,
+      messages: [
+        { role: "user", content: "run ls" },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu_1",
+              name: "Bash",
+              input: { command: "ls" },
+            },
+          ],
+        },
+      ],
+    }
+    const result = translateToOpenAI(payload)
+    expect(result.messages.at(-1)!.role).not.toBe("assistant")
+  })
+})
+
 // ── Stream translation ──────────────────────────────────────────────────────
 
 function freshState(): AnthropicStreamState {
