@@ -84,6 +84,7 @@ describe("Anthropic to OpenAI translation logic", () => {
           role: "assistant",
           content: "The weather in Boston is sunny and 75°F.",
         },
+        { role: "user", content: "Thanks." },
       ],
       temperature: 0.7,
       max_tokens: 150,
@@ -144,6 +145,7 @@ describe("Anthropic to OpenAI translation logic", () => {
             { type: "text", text: "2+2 equals 4." },
           ],
         },
+        { role: "user", content: "Thanks." },
       ],
       max_tokens: 100,
     }
@@ -180,6 +182,16 @@ describe("Anthropic to OpenAI translation logic", () => {
               id: "call_123",
               name: "get_weather",
               input: { location: "New York" },
+            },
+          ],
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "call_123",
+              content: "72°F and sunny",
             },
           ],
         },

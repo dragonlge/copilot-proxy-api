@@ -1,3 +1,5 @@
+import consola from "consola"
+
 import { state } from "~/lib/state"
 import {
   type ChatCompletionResponse,
@@ -30,12 +32,11 @@ import { mapOpenAIStopReasonToAnthropic } from "./utils"
 export function translateToOpenAI(
   payload: AnthropicMessagesPayload,
 ): ChatCompletionsPayload {
+  const messages = stripTrailingAssistantPrefill(payload.messages)
+
   return {
     model: translateModelName(payload.model),
-    messages: translateAnthropicMessagesToOpenAI(
-      payload.messages,
-      payload.system,
-    ),
+    messages: translateAnthropicMessagesToOpenAI(messages, payload.system),
     max_tokens: payload.max_tokens,
     stop: payload.stop_sequences,
     stream: payload.stream,
@@ -46,6 +47,24 @@ export function translateToOpenAI(
     tool_choice: translateAnthropicToolChoiceToOpenAI(payload.tool_choice),
     thinking: translateAnthropicThinkingToOpenAI(payload.thinking),
   }
+}
+
+function stripTrailingAssistantPrefill(
+  messages: Array<AnthropicMessage>,
+): Array<AnthropicMessage> {
+  let end = messages.length
+  while (end > 0 && messages[end - 1].role === "assistant") {
+    end--
+  }
+
+  if (end === messages.length) {
+    return messages
+  }
+
+  consola.warn(
+    `Stripped ${messages.length - end} trailing assistant prefill message(s) unsupported by Copilot chat completions`,
+  )
+  return messages.slice(0, end)
 }
 
 /**

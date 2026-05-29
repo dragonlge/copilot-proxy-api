@@ -332,6 +332,10 @@ describe("translateToOpenAI (request side)", () => {
             { type: "text", text: "4" },
           ],
         },
+        {
+          role: "user",
+          content: "thanks",
+        },
       ],
     }
     const result = translateToOpenAI(payload)
@@ -364,6 +368,116 @@ describe("translateToOpenAI (request side)", () => {
           parameters: { type: "object", properties: {} },
         },
       },
+    ])
+  })
+
+  test("strips a single trailing assistant prefill", () => {
+    const payload: AnthropicMessagesPayload = {
+      model: "claude-opus-4-5",
+      max_tokens: 100,
+      messages: [
+        { role: "user", content: "Write a greeting" },
+        { role: "assistant", content: "Hello" },
+      ],
+    }
+
+    const result = translateToOpenAI(payload)
+
+    expect(result.messages).toEqual([
+      { role: "user", content: "Write a greeting" },
+    ])
+  })
+
+  test("strips multiple trailing assistant prefill turns", () => {
+    const payload: AnthropicMessagesPayload = {
+      model: "claude-opus-4-5",
+      max_tokens: 100,
+      messages: [
+        { role: "user", content: "Summarize" },
+        { role: "assistant", content: "Draft one" },
+        { role: "assistant", content: "Draft two" },
+      ],
+    }
+
+    const result = translateToOpenAI(payload)
+
+    expect(result.messages).toEqual([{ role: "user", content: "Summarize" }])
+  })
+
+  test("strips trailing assistant tool-call prefill", () => {
+    const payload: AnthropicMessagesPayload = {
+      model: "claude-opus-4-5",
+      max_tokens: 100,
+      messages: [
+        { role: "user", content: "Read a file" },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu_123",
+              name: "Read",
+              input: { file_path: "README.md" },
+            },
+          ],
+        },
+      ],
+    }
+
+    const result = translateToOpenAI(payload)
+
+    expect(result.messages).toEqual([{ role: "user", content: "Read a file" }])
+  })
+
+  test("keeps assistant tool call when followed by tool result", () => {
+    const payload: AnthropicMessagesPayload = {
+      model: "claude-opus-4-5",
+      max_tokens: 100,
+      messages: [
+        { role: "user", content: "Read a file" },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu_123",
+              name: "Read",
+              input: { file_path: "README.md" },
+            },
+          ],
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "toolu_123",
+              content: "# Project",
+            },
+          ],
+        },
+      ],
+    }
+
+    const result = translateToOpenAI(payload)
+
+    expect(result.messages).toEqual([
+      { role: "user", content: "Read a file" },
+      {
+        role: "assistant",
+        content: null,
+        tool_calls: [
+          {
+            id: "toolu_123",
+            type: "function",
+            function: {
+              name: "Read",
+              arguments: JSON.stringify({ file_path: "README.md" }),
+            },
+          },
+        ],
+      },
+      { role: "tool", tool_call_id: "toolu_123", content: "# Project" },
     ])
   })
 })
