@@ -54,3 +54,24 @@ test("sets X-Initiator to user if only user present", async () => {
   ).headers
   expect(headers["X-Initiator"]).toBe("user")
 })
+
+test("retries transient upstream 499 responses", async () => {
+  const fetchMock = mock(() => {
+    if (fetchMock.mock.calls.length === 1) {
+      return new Response(null, { status: 499, statusText: "status code 499" })
+    }
+    return new Response(
+      JSON.stringify({ id: "123", object: "chat.completion", choices: [] }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    )
+  })
+  globalThis.fetch = fetchMock as unknown as typeof fetch
+
+  const response = await createChatCompletions({
+    messages: [{ role: "user", content: "hi" }],
+    model: "gpt-test",
+  })
+
+  expect(response).toMatchObject({ id: "123" })
+  expect(fetchMock).toHaveBeenCalledTimes(2)
+})

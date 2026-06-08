@@ -73,6 +73,7 @@ function shouldRetryResponse(response: Response, bodyLength: number): boolean {
     || response.status === 409
     || response.status === 425
     || response.status === 429
+    || response.status === 499
     || response.status === 500
     || response.status === 502
     || response.status === 503
