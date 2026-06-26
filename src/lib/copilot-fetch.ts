@@ -4,6 +4,7 @@ import { sleep } from "./utils"
 
 const DEFAULT_ATTEMPTS = 3
 const RETRY_DELAY_MS = 250
+const LARGE_PAYLOAD_CONTEXT_OVERFLOW_BYTES = 2_000_000
 
 export interface CopilotFetchOptions extends RequestInit {
   attempts?: number
@@ -35,7 +36,12 @@ export async function copilotFetch(
       )
     } catch (error) {
       lastError = error
-      if (attempt === attempts) throw error
+      if (
+        attempt === attempts
+        || isLikelyContextOverflowTimeout(error, bodyLength)
+      ) {
+        throw error
+      }
       consola.warn(
         `Copilot ${requestLabel} failed (${formatErrorMessage(error)}); retrying (${attempt}/${attempts})`,
       )
@@ -66,7 +72,12 @@ function formatErrorMessage(error: unknown): string {
 }
 
 function shouldRetryResponse(response: Response, bodyLength: number): boolean {
-  if (response.status >= 500 && bodyLength > 2_000_000) return false
+  if (
+    response.status >= 500
+    && bodyLength > LARGE_PAYLOAD_CONTEXT_OVERFLOW_BYTES
+  ) {
+    return false
+  }
 
   return (
     response.status === 408
@@ -78,5 +89,16 @@ function shouldRetryResponse(response: Response, bodyLength: number): boolean {
     || response.status === 502
     || response.status === 503
     || response.status === 504
+  )
+}
+
+export function isLikelyContextOverflowTimeout(
+  error: unknown,
+  bodyLength: number,
+): boolean {
+  return (
+    bodyLength > LARGE_PAYLOAD_CONTEXT_OVERFLOW_BYTES
+    && error instanceof Error
+    && /operation timed out|timed out/i.test(error.message)
   )
 }

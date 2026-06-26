@@ -1,29 +1,35 @@
-import { test, expect, mock } from "bun:test"
+import { afterEach, test, expect, mock } from "bun:test"
 
 import type { ChatCompletionsPayload } from "../src/services/copilot/create-chat-completions"
 
 import { state } from "../src/lib/state"
 import { createChatCompletions } from "../src/services/copilot/create-chat-completions"
 
+afterEach(() => {
+  mock.restore()
+})
+
 // Mock state
 state.copilotToken = "test-token"
 state.vsCodeVersion = "1.0.0"
 state.accountType = "individual"
 
-// Helper to mock fetch
-const fetchMock = mock(
-  (_url: string, opts: { headers: Record<string, string> }) => {
-    return {
-      ok: true,
-      json: () => ({ id: "123", object: "chat.completion", choices: [] }),
-      headers: opts.headers,
-    }
-  },
-)
-// @ts-expect-error - Mock fetch doesn't implement all fetch properties
-;(globalThis as unknown as { fetch: typeof fetch }).fetch = fetchMock
+function mockSuccessfulFetch() {
+  const fetchMock = mock(
+    (_url: string, opts: { headers: Record<string, string> }) => {
+      return {
+        ok: true,
+        json: () => ({ id: "123", object: "chat.completion", choices: [] }),
+        headers: opts.headers,
+      }
+    },
+  )
+  globalThis.fetch = fetchMock as unknown as typeof fetch
+  return fetchMock
+}
 
 test("sets X-Initiator to agent if tool/assistant present", async () => {
+  const fetchMock = mockSuccessfulFetch()
   const payload: ChatCompletionsPayload = {
     messages: [
       { role: "user", content: "hi" },
@@ -40,6 +46,7 @@ test("sets X-Initiator to agent if tool/assistant present", async () => {
 })
 
 test("sets X-Initiator to user if only user present", async () => {
+  const fetchMock = mockSuccessfulFetch()
   const payload: ChatCompletionsPayload = {
     messages: [
       { role: "user", content: "hi" },
@@ -50,9 +57,32 @@ test("sets X-Initiator to user if only user present", async () => {
   await createChatCompletions(payload)
   expect(fetchMock).toHaveBeenCalled()
   const headers = (
-    fetchMock.mock.calls[1][1] as { headers: Record<string, string> }
+    fetchMock.mock.calls[0][1] as { headers: Record<string, string> }
   ).headers
   expect(headers["X-Initiator"]).toBe("user")
+})
+
+test("large upstream timeout becomes prompt-too-long error", async () => {
+  const timeoutFetchMock = mock(() => {
+    throw new Error("The operation timed out.")
+  })
+  globalThis.fetch = timeoutFetchMock as unknown as typeof fetch
+
+  try {
+    await createChatCompletions({
+      messages: [{ role: "user", content: "x".repeat(2_000_001) }],
+      model: "gpt-test",
+      max_tokens: 1,
+    })
+  } catch (error) {
+    const response = (error as { response: Response }).response
+    const body = (await response.json()) as {
+      error: { type: string; message: string }
+    }
+    expect(body.error.type).toBe("invalid_request_error")
+    expect(body.error.message).toContain("prompt is too long")
+  }
+  expect(timeoutFetchMock).toHaveBeenCalledTimes(1)
 })
 
 test("retries transient upstream 499 responses", async () => {

@@ -2,9 +2,12 @@ import consola from "consola"
 import { events } from "fetch-event-stream"
 
 import { copilotHeaders, copilotBaseUrl } from "~/lib/api-config"
-import { copilotFetch } from "~/lib/copilot-fetch"
+import {
+  copilotFetch,
+  isLikelyContextOverflowTimeout,
+} from "~/lib/copilot-fetch"
 import { HTTPError } from "~/lib/error"
-import { getModelPromptLimit } from "~/lib/model-limits"
+import { createPromptTooLongError } from "~/lib/prompt-too-long"
 import { state } from "~/lib/state"
 
 /* eslint-disable complexity */
@@ -34,14 +37,19 @@ export const createChatCompletions = async (
     `Sending payload: ${body.length} bytes, ${payload.messages.length} messages, model: ${payload.model}`,
   )
 
-  const response = await copilotFetch(
-    `${copilotBaseUrl(state)}/chat/completions`,
-    {
+  let response: Response
+  try {
+    response = await copilotFetch(`${copilotBaseUrl(state)}/chat/completions`, {
       method: "POST",
       headers,
       body,
-    },
-  )
+    })
+  } catch (error) {
+    if (isLikelyContextOverflowTimeout(error, body.length)) {
+      throw createPromptTooLongError(payload, body.length)
+    }
+    throw error
+  }
 
   if (!response.ok) {
     const errorBody = await response.text()
@@ -84,39 +92,7 @@ export const createChatCompletions = async (
       // 168K for opus-4.7) rather than max_context_window_tokens (the
       // total window incl. output, ≥200K). Falling back to the larger field
       // and finally 200K preserves behavior for models lacking metadata.
-      const estimatedTokens = Math.ceil(body.length / 4)
-      const modelCaps = state.models?.data.find((m) => m.id === payload.model)
-        ?.capabilities.limits
-      const modelLimit = getModelPromptLimit(payload.model, modelCaps)
-      const maxOutputTokens = payload.max_tokens ?? 0
-
-      consola.warn(
-        `Context overflow → returning 400 prompt-too-long (~${estimatedTokens} + ${maxOutputTokens} > ${modelLimit}) to trigger Claude Code reactive compaction`,
-      )
-
-      // Message format satisfies BOTH Claude Code recovery paths:
-      //   1. substring "prompt is too long" → tryReactiveCompact (compact.ts)
-      //   2. regex "input length and `max_tokens` exceed context limit:
-      //      (\d+) \+ (\d+) > (\d+)" → parseMaxTokensContextOverflowError
-      //      (withRetry.ts), which auto-shrinks max_tokens and retries
-      //      cleanly without throwing away history.
-      throw new HTTPError(
-        "Prompt too long",
-        new Response(
-          JSON.stringify({
-            type: "error",
-            error: {
-              type: "invalid_request_error",
-              message: `prompt is too long: input length and \`max_tokens\` exceed context limit: ${estimatedTokens} + ${maxOutputTokens} > ${modelLimit} tokens`,
-            },
-          }),
-          {
-            status: 400,
-            statusText: "Bad Request",
-            headers: { "content-type": "application/json" },
-          },
-        ),
-      )
+      throw createPromptTooLongError(payload, body.length)
     }
 
     throw new HTTPError(
@@ -231,6 +207,7 @@ export interface ChatCompletionsPayload {
   response_format?: { type: "json_object" } | null
   seed?: number | null
   thinking?: { type: "enabled" | "disabled" } | null
+  reasoning_effort?: "low" | "medium" | "high" | "xhigh" | "max" | null
   tools?: Array<Tool> | null
   tool_choice?:
     | "none"

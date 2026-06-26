@@ -3,6 +3,8 @@ import { Hono } from "hono"
 
 import type { ModelsResponse } from "~/services/copilot/get-models"
 
+import { UNKNOWN_MODEL_PAYLOAD_BYTES } from "~/lib/context-manager"
+import { forwardError } from "~/lib/error"
 import { state } from "~/lib/state"
 import { handleCompletion } from "~/routes/messages/handler"
 
@@ -17,7 +19,13 @@ afterEach(() => {
 
 function createApp(): Hono {
   const app = new Hono()
-  app.post("/v1/messages", (c) => handleCompletion(c))
+  app.post("/v1/messages", async (c) => {
+    try {
+      return await handleCompletion(c)
+    } catch (error) {
+      return await forwardError(c, error)
+    }
+  })
   return app
 }
 
@@ -48,6 +56,120 @@ function setModels(models: Array<{ endpoints?: Array<string>; id: string }>) {
     })),
   } satisfies ModelsResponse
 }
+
+describe("Messages Responses bridge", () => {
+  test("opens streaming SSE before Copilot returns response headers", async () => {
+    setModels([{ id: "claude-opus-4.8", endpoints: ["/chat/completions"] }])
+    const app = createApp()
+
+    let resolveFetch: ((response: Response) => void) | undefined
+    const upstreamResponse = new Promise<Response>((resolve) => {
+      resolveFetch = resolve
+    })
+    const fetchMock = mock(() => upstreamResponse)
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+
+    const responsePromise = Promise.resolve(
+      app.request("/v1/messages", {
+        method: "POST",
+        body: JSON.stringify({
+          model: "claude-opus-4.8",
+          max_tokens: 100,
+          stream: true,
+          messages: [{ role: "user", content: "hello" }],
+        }),
+        headers: { "content-type": "application/json" },
+      }),
+    )
+
+    type ResponseRaceResult =
+      | { response: Response; type: "response" }
+      | { type: "timeout" }
+
+    const race = await Promise.race<ResponseRaceResult>([
+      responsePromise.then(
+        (response): ResponseRaceResult => ({ response, type: "response" }),
+      ),
+      new Promise<ResponseRaceResult>((resolve) => {
+        setTimeout(() => resolve({ type: "timeout" }), 25)
+      }),
+    ])
+
+    if (race.type === "timeout") {
+      resolveFetch?.(
+        new Response("data: [DONE]\n\n", {
+          headers: { "content-type": "text/event-stream" },
+        }),
+      )
+      await responsePromise.catch(() => {})
+    }
+
+    expect(race.type).toBe("response")
+    if (race.type !== "response") return
+
+    expect(race.response.status).toBe(200)
+    const reader = race.response.body?.getReader()
+    expect(reader).toBeDefined()
+    if (!reader) return
+
+    type ChunkRaceResult =
+      | { result: Awaited<ReturnType<typeof reader.read>>; type: "chunk" }
+      | { type: "timeout" }
+
+    const firstChunk = await Promise.race<ChunkRaceResult>([
+      reader
+        .read()
+        .then((result): ChunkRaceResult => ({ result, type: "chunk" })),
+      new Promise<ChunkRaceResult>((resolve) => {
+        setTimeout(() => resolve({ type: "timeout" }), 25)
+      }),
+    ])
+
+    expect(firstChunk.type).toBe("chunk")
+    if (firstChunk.type !== "chunk") return
+    expect(firstChunk.result.done).toBe(false)
+    if (firstChunk.result.done) return
+    const chunkText = new TextDecoder().decode(
+      firstChunk.result.value as Uint8Array,
+    )
+    expect(chunkText).toContain("event: ping")
+
+    resolveFetch?.(
+      new Response("data: [DONE]\n\n", {
+        headers: { "content-type": "text/event-stream" },
+      }),
+    )
+    await reader.cancel()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  test("emits prompt-too-long as a streaming Anthropic error", async () => {
+    setModels([{ id: "claude-opus-4.8", endpoints: ["/chat/completions"] }])
+    const app = createApp()
+    const fetchMock = mock(
+      () => new Response("request entity too large", { status: 413 }),
+    )
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+
+    const response = await app.request("/v1/messages", {
+      method: "POST",
+      body: JSON.stringify({
+        model: "claude-opus-4.8",
+        max_tokens: 100,
+        stream: true,
+        messages: [{ role: "user", content: "hello" }],
+      }),
+      headers: { "content-type": "application/json" },
+    })
+
+    expect(response.status).toBe(200)
+    const text = await response.text()
+    expect(text).toContain("event: error")
+    expect(text).toContain("invalid_request_error")
+    expect(text).toContain("prompt is too long")
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+})
 
 describe("Messages Responses bridge", () => {
   test("routes Responses-only models away from chat completions", async () => {
@@ -147,5 +269,89 @@ describe("Messages Responses bridge", () => {
       content: [{ type: "text", text: "chat" }],
     })
     expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  test("fits large custom Claude Code aliases before forwarding to Copilot", async () => {
+    const app = createApp()
+    const fetchMock = mock((_url: string, opts: RequestInit) => {
+      const sentBody = opts.body as string
+      const sentPayload = JSON.parse(sentBody) as {
+        messages: Array<unknown>
+        model: string
+      }
+      expect(sentBody.length).toBeLessThanOrEqual(UNKNOWN_MODEL_PAYLOAD_BYTES)
+      expect(sentPayload.model).toBe("ultracode")
+      expect(JSON.stringify(sentPayload.messages.at(-1))).toContain(
+        "latest task",
+      )
+
+      return new Response(
+        JSON.stringify({
+          id: "chatcmpl_ultracode",
+          object: "chat.completion",
+          created: 0,
+          model: "ultracode",
+          choices: [
+            {
+              index: 0,
+              message: { role: "assistant", content: "ok" },
+              logprobs: null,
+              finish_reason: "stop",
+            },
+          ],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      )
+    })
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+
+    const response = await app.request("/v1/messages", {
+      method: "POST",
+      body: JSON.stringify({
+        model: "ultracode",
+        max_tokens: 100,
+        messages: [
+          { role: "user", content: "old-1\n" + "x".repeat(900_000) },
+          { role: "assistant", content: "old-2\n" + "x".repeat(900_000) },
+          { role: "user", content: "old-3\n" + "x".repeat(900_000) },
+          { role: "assistant", content: "old-4\n" + "x".repeat(900_000) },
+          { role: "user", content: "latest task" },
+        ],
+      }),
+      headers: { "content-type": "application/json" },
+    })
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({
+      content: [{ type: "text", text: "ok" }],
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  test("fails fast when a custom alias request cannot be fitted safely", async () => {
+    const app = createApp()
+    const fetchMock = mock(() => {
+      throw new Error("fetch should not be called")
+    })
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+
+    const response = await app.request("/v1/messages", {
+      method: "POST",
+      body: JSON.stringify({
+        model: "ultracode",
+        max_tokens: 100,
+        messages: [{ role: "user", content: "x".repeat(2_500_000) }],
+      }),
+      headers: { "content-type": "application/json" },
+    })
+
+    expect(response.status).toBe(400)
+    const body = (await response.json()) as {
+      error: { type: string; message: string }
+    }
+    expect(body.error.type).toBe("invalid_request_error")
+    expect(body.error.message).toContain("prompt is too long")
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })

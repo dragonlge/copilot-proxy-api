@@ -7,7 +7,7 @@
 
 /* eslint-disable @typescript-eslint/no-non-null-assertion */
 
-import { describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
 import consola from "consola"
 import { Hono } from "hono"
 
@@ -26,6 +26,7 @@ import type {
 
 import { forwardError, HTTPError } from "~/lib/error"
 import { extractPdfText } from "~/lib/pdf"
+import { state } from "~/lib/state"
 import {
   preprocessAnthropicPayload,
   translateToAnthropic,
@@ -37,6 +38,11 @@ import {
 } from "~/routes/messages/stream-translation"
 import { mapOpenAIStopReasonToAnthropic } from "~/routes/messages/utils"
 
+afterEach(() => {
+  delete process.env.COPILOT_OVERRIDE_OPUS
+  state.models = undefined
+})
+
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 async function callForwardError(error: unknown): Promise<{
@@ -47,6 +53,27 @@ async function callForwardError(error: unknown): Promise<{
   app.get("/", async (c) => forwardError(c, error))
   const res = await app.request("/")
   return { status: res.status, body: await res.json() }
+}
+
+function addModel(id: string) {
+  state.models ??= { object: "list", data: [] }
+  state.models.data.push({
+    id,
+    object: "model",
+    name: id,
+    model_picker_enabled: true,
+    preview: false,
+    vendor: "anthropic",
+    version: "1",
+    capabilities: {
+      family: id,
+      limits: {},
+      object: "model_capabilities",
+      supports: {},
+      tokenizer: "cl100k_base",
+      type: "chat",
+    },
+  })
 }
 
 // ── Error envelope ──────────────────────────────────────────────────────────
@@ -313,6 +340,47 @@ describe("translateToAnthropic (response side)", () => {
 })
 
 describe("translateToOpenAI (request side)", () => {
+  test("preserves explicit Claude version instead of upgrading to latest family model", () => {
+    addModel("claude-opus-4.6-1m")
+    addModel("claude-opus-4.8")
+
+    const result = translateToOpenAI({
+      model: "claude-opus-4-6-20260101",
+      max_tokens: 1,
+      messages: [{ role: "user", content: "x" }],
+    })
+
+    expect(result.model).toBe("claude-opus-4.6-1m")
+  })
+
+  test("uses explicit proxy environment override before request model", () => {
+    addModel("claude-opus-4.6-1m")
+    addModel("claude-opus-4.8")
+    process.env.COPILOT_OVERRIDE_OPUS = "claude-opus-4.6-1m"
+
+    const result = translateToOpenAI({
+      model: "claude-opus-4-5",
+      max_tokens: 1,
+      messages: [{ role: "user", content: "x" }],
+    })
+
+    expect(result.model).toBe("claude-opus-4.6-1m")
+  })
+
+  test("preserves Claude Code ultracode effort envelope", () => {
+    const result = translateToOpenAI({
+      model: "claude-opus-4-8",
+      max_tokens: 64_000,
+      output_config: { effort: "xhigh" },
+      thinking: { type: "adaptive" },
+      messages: [{ role: "user", content: "workflow audit src" }],
+    })
+
+    expect(result.reasoning_effort).toBe("xhigh")
+    expect(result.thinking).toEqual({ type: "enabled" })
+    expect(result.max_tokens).toBe(64_000)
+  })
+
   test("drops thinking blocks from assistant turn (does not promote to text)", () => {
     const payload: AnthropicMessagesPayload = {
       model: "claude-opus-4-5",
@@ -653,6 +721,18 @@ describe("translateErrorToAnthropicErrorEvent", () => {
     expect(event.type).toBe("error")
     if (event.type === "error") {
       expect(event.error.message).toBe("backend exploded")
+    }
+  })
+
+  test("streaming timeout triggers Claude Code context compaction", () => {
+    const event = translateErrorToAnthropicErrorEvent(
+      "The operation timed out.",
+    )
+
+    expect(event.type).toBe("error")
+    if (event.type === "error") {
+      expect(event.error.type).toBe("invalid_request_error")
+      expect(event.error.message).toContain("prompt is too long")
     }
   })
 })

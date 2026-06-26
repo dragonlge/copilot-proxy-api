@@ -182,6 +182,17 @@ export function translateChunkToAnthropicEvents(
 export function translateErrorToAnthropicErrorEvent(
   message?: string,
 ): AnthropicStreamEventData {
+  if (isContextOverflowMessage(message)) {
+    return {
+      type: "error",
+      error: {
+        type: "invalid_request_error",
+        message:
+          "prompt is too long: upstream operation timed out while streaming the response",
+      },
+    }
+  }
+
   return {
     type: "error",
     error: {
@@ -189,4 +200,16 @@ export function translateErrorToAnthropicErrorEvent(
       message: message ?? "An unexpected error occurred during streaming.",
     },
   }
+}
+
+function isContextOverflowMessage(message: string | undefined): boolean {
+  return (
+    message !== undefined
+    && (/prompt is too long/i.test(message)
+      || /operation timed out/i.test(message)
+      || /request entity too large/i.test(message)
+      || /context_length_exceeded/i.test(message)
+      || /payload too large/i.test(message)
+      || /maximum context length/i.test(message))
+  )
 }

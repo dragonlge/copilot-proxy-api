@@ -53,6 +53,11 @@ import { getKnownModelPromptLimit } from "./model-limits"
  */
 const MAX_PAYLOAD_BYTES = 5_000_000
 
+/** Conservative ceiling for custom Claude Code aliases / effort modes that do
+ *  not appear in Copilot model metadata. Copilot can hang for minutes in the
+ *  2.5-5 MB range, so unknown models stay below that dead zone. */
+export const UNKNOWN_MODEL_PAYLOAD_BYTES = 1_900_000
+
 /** Minimum protected byte budget for recent tool outputs before pruning. */
 const PRUNE_PROTECT_BYTES = 200_000
 
@@ -126,8 +131,27 @@ export function fitContext(
   payload: ChatCompletionsPayload,
   model: Model,
 ): ChatCompletionsPayload {
-  const initialBytes = estimatePayloadBytes(payload)
   const ceiling = computeEffectiveCeiling(model)
+  return fitPayloadToCeiling(payload, ceiling)
+}
+
+export function fitUnknownModelContext(
+  payload: ChatCompletionsPayload,
+): ChatCompletionsPayload {
+  return fitPayloadToCeiling(payload, UNKNOWN_MODEL_PAYLOAD_BYTES)
+}
+
+export function isPayloadOverUnknownModelCeiling(
+  payload: ChatCompletionsPayload,
+): boolean {
+  return estimatePayloadBytes(payload) > UNKNOWN_MODEL_PAYLOAD_BYTES
+}
+
+function fitPayloadToCeiling(
+  payload: ChatCompletionsPayload,
+  ceiling: number,
+): ChatCompletionsPayload {
+  const initialBytes = estimatePayloadBytes(payload)
 
   // Fast path: well under the effective ceiling — just send.
   if (initialBytes <= ceiling) {

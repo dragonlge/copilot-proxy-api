@@ -56,4 +56,23 @@ describe("copilotFetch", () => {
     expect(response.status).toBe(200)
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
+
+  test("does not retry likely context-overflow timeout throws", async () => {
+    const fetchMock = mock(() => {
+      throw new Error("The operation timed out.")
+    })
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+
+    try {
+      await copilotFetch("https://example.com", {
+        method: "POST",
+        body: "x".repeat(2_000_001),
+        retryDelayMs: 0,
+      })
+    } catch (error) {
+      expect(error).toBeInstanceOf(Error)
+      expect((error as Error).message).toBe("The operation timed out.")
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
 })

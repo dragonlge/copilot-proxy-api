@@ -48,6 +48,7 @@ export function translateToOpenAI(
     tools: translateAnthropicToolsToOpenAI(payload.tools),
     tool_choice: translateAnthropicToolChoiceToOpenAI(payload.tool_choice),
     thinking: translateAnthropicThinkingToOpenAI(payload.thinking),
+    reasoning_effort: payload.output_config?.effort,
   }
 }
 
@@ -210,29 +211,88 @@ function pickLatestCopilotModel(family: ClaudeFamily): string | null {
   return best.id
 }
 
+function parseRequestedClaudeVersion(
+  model: string,
+  family: ClaudeFamily,
+): [number, number] | null {
+  const match = new RegExp(`${family}-(\\d+)[.-](\\d+)(?:$|[-@:.])`).exec(
+    model.toLowerCase(),
+  )
+  if (!match) return null
+  return [Number(match[1]), Number(match[2])]
+}
+
+function isCopilotClaudeModelId(model: string): boolean {
+  return /claude-(?:opus|sonnet|haiku)-\d+\.\d+(?:$|-)/i.test(model)
+}
+
+/** Pick the Copilot model matching the user-requested Claude version.
+ *  Among equal versions, prefer the `-1m` variant. */
+function pickMatchingCopilotModel(
+  family: ClaudeFamily,
+  version: [number, number],
+): string | null {
+  const candidates =
+    state.models?.data.filter((m) => {
+      const candidateVersion = parseCopilotVersion(m.id)
+      return (
+        m.id.toLowerCase().includes(family)
+        && candidateVersion[0] === version[0]
+        && candidateVersion[1] === version[1]
+      )
+    }) ?? []
+  if (candidates.length === 0) return null
+
+  let best = candidates[0]
+  let bestIs1m = best.id.includes("-1m")
+
+  for (const m of candidates.slice(1)) {
+    const is1m = m.id.includes("-1m")
+    if (is1m && !bestIs1m) {
+      best = m
+      bestIs1m = is1m
+    }
+  }
+  return best.id
+}
+
 function translateModelName(model: string): string {
   // Claude Code uses Anthropic model IDs (e.g. claude-opus-4-5-20251101);
-  // Copilot uses version-only names (e.g. claude-opus-4.7). We resolve
-  // dynamically against the live model list so new Copilot versions
-  // (4.8, 5.x, …) are picked up automatically.
+  // Copilot uses version-only names (e.g. claude-opus-4.7). Preserve the
+  // version Claude Code requested instead of upgrading a family to latest.
+
+  const family = detectFamily(model)
+  if (family) {
+    const override = process.env[`COPILOT_OVERRIDE_${family.toUpperCase()}`]
+    if (override) return override
+  }
 
   // 1. Already a valid Copilot model id → pass through unchanged.
   if (state.models?.data.some((m) => m.id === model)) {
     return model
   }
 
-  // 2. Detect family and route to the latest available Copilot model in
-  //    that family. This replaces the previously-hardcoded mappings that
-  //    silently downgraded newer versions to claude-opus-4.6-1m.
-  const family = detectFamily(model)
-  if (family) {
-    const latest = pickLatestCopilotModel(family)
-    if (latest) return latest
-  }
-
-  // 3. Static fallback for short aliases when state.models hasn't loaded.
+  // 2. Exact short aliases use pinned defaults. These come from user/tool
+  //    settings, so do not reinterpret them as "latest family member".
   if (MODEL_NAME_FALLBACK[model]) {
     return MODEL_NAME_FALLBACK[model]
+  }
+
+  // 3. For explicit Claude version names, use the matching Copilot version
+  //    when available. If the input is already a Copilot-shaped dotted id,
+  //    preserve it even when state.models is not loaded yet.
+  if (family) {
+    const requestedVersion = parseRequestedClaudeVersion(model, family)
+    if (requestedVersion) {
+      const matching = pickMatchingCopilotModel(family, requestedVersion)
+      if (matching) return matching
+      if (isCopilotClaudeModelId(model)) return model
+    }
+
+    const latest = pickLatestCopilotModel(family)
+    if (latest) return latest
+
+    return MODEL_NAME_FALLBACK[family]
   }
 
   return model

@@ -7,7 +7,13 @@ import type { ResponsesApiResponse } from "~/routes/responses/types"
 import type { Model } from "~/services/copilot/get-models"
 
 import { awaitApproval } from "~/lib/approval"
-import { fitContext } from "~/lib/context-manager"
+import {
+  fitContext,
+  fitUnknownModelContext,
+  isPayloadOverUnknownModelCeiling,
+} from "~/lib/context-manager"
+import { HTTPError } from "~/lib/error"
+import { createPromptTooLongError } from "~/lib/prompt-too-long"
 import { checkRateLimit } from "~/lib/rate-limit"
 import { state } from "~/lib/state"
 import {
@@ -44,10 +50,8 @@ const CHAT_COMPLETIONS_ENDPOINT = "/chat/completions"
 const RESPONSES_ENDPOINT = "/responses"
 
 type SSEStream = Parameters<Parameters<typeof streamSSE>[1]>[0]
-type ChatCompletionStream = Exclude<
-  Awaited<ReturnType<typeof createChatCompletions>>,
-  ChatCompletionResponse
->
+type ChatCompletionResult = Awaited<ReturnType<typeof createChatCompletions>>
+type CreateChatCompletionResponse = () => Promise<ChatCompletionResult>
 
 interface ChatCompletionFlowOptions {
   clientModel: string
@@ -59,7 +63,7 @@ interface ResponsesFlowOptions extends ChatCompletionFlowOptions {
 }
 
 interface ChatCompletionStreamOptions extends ChatCompletionFlowOptions {
-  response: ChatCompletionStream
+  createResponse: CreateChatCompletionResponse
   streamState: AnthropicStreamState
 }
 
@@ -128,7 +132,17 @@ async function handleChatCompletions(
 
   // Byte-based context management — fast path returns input unchanged.
   const model = state.models?.data.find((m) => m.id === openAIPayload.model)
-  const fittedPayload = model ? fitContext(openAIPayload, model) : openAIPayload
+  const fittedPayload =
+    model ?
+      fitContext(openAIPayload, model)
+    : fitUnknownModelContext(openAIPayload)
+
+  if (!model && isPayloadOverUnknownModelCeiling(fittedPayload)) {
+    throw createPromptTooLongError(
+      fittedPayload,
+      JSON.stringify(fittedPayload).length,
+    )
+  }
 
   if (fittedPayload.messages.length !== openAIPayload.messages.length) {
     consola.info(
@@ -140,14 +154,20 @@ async function handleChatCompletions(
     await awaitApproval()
   }
 
-  const response = await createChatCompletions(fittedPayload)
-
-  if (isNonStreaming(response)) {
-    return handleNonStreamingChatCompletion(c, response, options)
+  if (fittedPayload.stream) {
+    consola.debug(`[${options.requestId}] Streaming response from Copilot`)
+    return handleStreamingChatCompletion(
+      c,
+      () => createChatCompletions(fittedPayload),
+      options,
+    )
   }
 
-  consola.debug(`[${options.requestId}] Streaming response from Copilot`)
-  return handleStreamingChatCompletion(c, response, options)
+  const response = await createChatCompletions(fittedPayload)
+  if (!isNonStreaming(response)) {
+    throw new Error("Expected non-streaming response from Copilot")
+  }
+  return handleNonStreamingChatCompletion(c, response, options)
 }
 
 async function handleResponsesMessages(
@@ -247,7 +267,7 @@ function createTranslationErrorBody(error: unknown, requestId: string) {
 
 function handleStreamingChatCompletion(
   c: Context,
-  response: ChatCompletionStream,
+  createResponse: CreateChatCompletionResponse,
   options: ChatCompletionFlowOptions,
 ) {
   return streamSSE(c, async (stream) => {
@@ -261,9 +281,10 @@ function handleStreamingChatCompletion(
     const stopPings = startPings(stream)
 
     try {
+      await writePing(stream)
       await forwardChatCompletionStream(stream, {
         ...options,
-        response,
+        createResponse,
         streamState,
       })
     } catch (error) {
@@ -280,19 +301,29 @@ function handleStreamingChatCompletion(
 
 function startPings(stream: SSEStream): () => void {
   const pingTimer = setInterval(() => {
-    void stream
-      .writeSSE({ event: "ping", data: JSON.stringify({ type: "ping" }) })
-      .catch(() => {})
+    void writePing(stream).catch(() => {})
   }, PING_INTERVAL_MS)
 
   return () => clearInterval(pingTimer)
+}
+
+async function writePing(stream: SSEStream): Promise<void> {
+  await stream.writeSSE({
+    event: "ping",
+    data: JSON.stringify({ type: "ping" }),
+  })
 }
 
 async function forwardChatCompletionStream(
   stream: SSEStream,
   options: ChatCompletionStreamOptions,
 ) {
-  for await (const rawEvent of options.response) {
+  const response = await options.createResponse()
+  if (isNonStreaming(response)) {
+    throw new Error("Expected streaming response from Copilot")
+  }
+
+  for await (const rawEvent of response) {
     if (rawEvent.data === "[DONE]") break
     if (!rawEvent.data) continue
 
@@ -332,15 +363,12 @@ async function emitStreamErrorCleanup(
   consola.error(`[${options.requestId}] Streaming error:`, options.error)
 
   try {
+    const errorMessage = await extractStreamErrorMessage(options.error)
     await closeOpenContentBlock(stream, options.streamState)
     await closeStartedMessage(stream, options.streamState)
     await stream.writeSSE({
       event: "error",
-      data: JSON.stringify(
-        translateErrorToAnthropicErrorEvent(
-          options.error instanceof Error ? options.error.message : undefined,
-        ),
-      ),
+      data: JSON.stringify(translateErrorToAnthropicErrorEvent(errorMessage)),
     })
   } catch (cleanupError) {
     consola.error(
@@ -348,6 +376,48 @@ async function emitStreamErrorCleanup(
       cleanupError,
     )
   }
+}
+
+async function extractStreamErrorMessage(
+  error: unknown,
+): Promise<string | undefined> {
+  if (error instanceof HTTPError) {
+    try {
+      return extractMessageFromErrorText(await error.response.text())
+    } catch {
+      return error.message
+    }
+  }
+
+  return error instanceof Error ? error.message : undefined
+}
+
+function extractMessageFromErrorText(errorText: string): string {
+  try {
+    const parsed = JSON.parse(errorText) as unknown
+    const extracted = extractMessageFromParsedError(parsed)
+    if (extracted) return extracted
+  } catch {
+    return errorText
+  }
+
+  return errorText
+}
+
+function extractMessageFromParsedError(parsed: unknown): string | undefined {
+  if (typeof parsed === "string") return parsed
+  if (typeof parsed !== "object" || parsed === null) return undefined
+
+  const obj = parsed as Record<string, unknown>
+  const error = obj.error
+  if (typeof error === "string") return error
+  if (typeof error === "object" && error !== null) {
+    const nested = error as Record<string, unknown>
+    if (typeof nested.message === "string") return nested.message
+  }
+  if (typeof obj.message === "string") return obj.message
+
+  return undefined
 }
 
 async function closeOpenContentBlock(
