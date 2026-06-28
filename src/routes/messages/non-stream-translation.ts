@@ -35,9 +35,10 @@ export function translateToOpenAI(
   const messages = stripTrailingAssistantPrefill(
     translateAnthropicMessagesToOpenAI(payload.messages, payload.system),
   )
+  const model = translateModelName(payload.model)
 
   return {
-    model: translateModelName(payload.model),
+    model,
     messages,
     max_tokens: payload.max_tokens,
     stop: payload.stop_sequences,
@@ -48,8 +49,26 @@ export function translateToOpenAI(
     tools: translateAnthropicToolsToOpenAI(payload.tools),
     tool_choice: translateAnthropicToolChoiceToOpenAI(payload.tool_choice),
     thinking: translateAnthropicThinkingToOpenAI(payload.thinking),
-    reasoning_effort: payload.output_config?.effort,
+    reasoning_effort: translateReasoningEffort(
+      model,
+      payload.output_config?.effort,
+    ),
   }
+}
+
+function translateReasoningEffort(
+  model: string,
+  effort: ChatCompletionsPayload["reasoning_effort"],
+): ChatCompletionsPayload["reasoning_effort"] {
+  if (!effort) return undefined
+
+  const modelMetadata = state.models?.data.find((m) => m.id === model)
+  if (!modelMetadata) return effort
+
+  const supportedEfforts = modelMetadata.capabilities.supports.reasoning_effort
+  if (!supportedEfforts?.length) return undefined
+
+  return supportedEfforts.includes(effort) ? effort : undefined
 }
 
 function stripTrailingAssistantPrefill(

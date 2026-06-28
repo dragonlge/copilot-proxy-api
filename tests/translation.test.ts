@@ -55,7 +55,12 @@ async function callForwardError(error: unknown): Promise<{
   return { status: res.status, body: await res.json() }
 }
 
-function addModel(id: string) {
+function addModel(
+  id: string,
+  supports: NonNullable<
+    typeof state.models
+  >["data"][number]["capabilities"]["supports"] = {},
+) {
   state.models ??= { object: "list", data: [] }
   state.models.data.push({
     id,
@@ -69,7 +74,7 @@ function addModel(id: string) {
       family: id,
       limits: {},
       object: "model_capabilities",
-      supports: {},
+      supports,
       tokenizer: "cl100k_base",
       type: "chat",
     },
@@ -381,6 +386,54 @@ describe("translateToOpenAI (request side)", () => {
     expect(result.max_tokens).toBe(64_000)
   })
 
+  test("drops reasoning effort for known Copilot models that do not support it", () => {
+    addModel("claude-haiku-4.5")
+
+    const result = translateToOpenAI({
+      model: "claude-haiku-4.5",
+      max_tokens: 1,
+      output_config: { effort: "high" },
+      messages: [{ role: "user", content: "summarize" }],
+    })
+
+    expect(result.model).toBe("claude-haiku-4.5")
+    expect(result.reasoning_effort).toBeUndefined()
+  })
+
+  test("keeps reasoning effort for known Copilot models that support it", () => {
+    addModel("claude-opus-4.8", {
+      reasoning_effort: ["low", "medium", "high", "xhigh", "max"],
+    })
+
+    const result = translateToOpenAI({
+      model: "claude-opus-4.8",
+      max_tokens: 1,
+      output_config: { effort: "xhigh" },
+      messages: [{ role: "user", content: "audit" }],
+    })
+
+    expect(result.model).toBe("claude-opus-4.8")
+    expect(result.reasoning_effort).toBe("xhigh")
+  })
+
+  test("drops unsupported reasoning effort for known Copilot models with partial effort support", () => {
+    addModel("claude-sonnet-4.6", {
+      reasoning_effort: ["low", "medium", "high", "max"],
+    })
+
+    const result = translateToOpenAI({
+      model: "claude-sonnet-4.6",
+      max_tokens: 1,
+      output_config: { effort: "xhigh" },
+      messages: [{ role: "user", content: "audit" }],
+    })
+
+    expect(result.model).toBe("claude-sonnet-4.6")
+    expect(result.reasoning_effort).toBeUndefined()
+  })
+})
+
+describe("translateToOpenAI (message and tool translation)", () => {
   test("drops thinking blocks from assistant turn (does not promote to text)", () => {
     const payload: AnthropicMessagesPayload = {
       model: "claude-opus-4-5",
