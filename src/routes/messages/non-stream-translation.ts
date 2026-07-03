@@ -175,8 +175,8 @@ function documentHeader(block: AnthropicDocumentBlock): string {
 // dynamic resolver can't find a family match.
 const MODEL_NAME_FALLBACK: Record<string, string> = {
   haiku: "claude-haiku-4.5",
-  sonnet: "claude-sonnet-4",
-  opus: "claude-opus-4.6-1m",
+  sonnet: "claude-sonnet-5",
+  opus: "claude-opus-4.8",
 }
 
 const CLAUDE_FAMILIES = ["opus", "sonnet", "haiku"] as const
@@ -195,11 +195,13 @@ function detectFamily(model: string): ClaudeFamily | null {
 }
 
 /** Parse a numeric version tuple from a Copilot model id like
- *  `claude-opus-4.7` → [4, 7]. Returns [0, 0] if no version found. */
+ *  `claude-opus-4.7` → [4, 7] or `claude-sonnet-5` → [5, 0].
+ *  Returns [0, 0] if no version found. */
 function parseCopilotVersion(id: string): [number, number] {
-  const match = /(\d+)\.(\d+)/.exec(id)
+  const match =
+    /(?:opus|sonnet|haiku)-(\d{1,2})(?:[.-](\d{1,2}))?(?:$|[-_.])/i.exec(id)
   if (!match) return [0, 0]
-  return [Number(match[1]), Number(match[2])]
+  return [Number(match[1]), match[2] ? Number(match[2]) : 0]
 }
 
 /** Pick the best Copilot model in a family from state.models.
@@ -234,15 +236,20 @@ function parseRequestedClaudeVersion(
   model: string,
   family: ClaudeFamily,
 ): [number, number] | null {
-  const match = new RegExp(`${family}-(\\d+)[.-](\\d+)(?:$|[-@:.])`).exec(
-    model.toLowerCase(),
-  )
+  const match = new RegExp(
+    `${family}-(\\d{1,2})(?:[.-](\\d{1,2}))?(?:$|[-@:.])`,
+  ).exec(model.toLowerCase())
   if (!match) return null
-  return [Number(match[1]), Number(match[2])]
+  return [Number(match[1]), match[2] ? Number(match[2]) : 0]
 }
 
 function isCopilotClaudeModelId(model: string): boolean {
-  return /claude-(?:opus|sonnet|haiku)-\d+\.\d+(?:$|-)/i.test(model)
+  const match =
+    /^claude-(?:opus|sonnet|haiku)-(\d{1,2})(?:\.(\d{1,2})(?:-.+)?)?$/i.exec(
+      model,
+    )
+  if (!match) return false
+  return Boolean(match[2]) || Number(match[1]) >= 5
 }
 
 /** Pick the Copilot model matching the user-requested Claude version.
@@ -305,7 +312,7 @@ function translateModelName(model: string): string {
     if (requestedVersion) {
       const matching = pickMatchingCopilotModel(family, requestedVersion)
       if (matching) return matching
-      if (isCopilotClaudeModelId(model)) return model
+      if (!state.models && isCopilotClaudeModelId(model)) return model
     }
 
     const latest = pickLatestCopilotModel(family)

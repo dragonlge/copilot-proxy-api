@@ -255,20 +255,21 @@ Tests use `bun:test` and focus on translation logic validation:
 | Input (Claude Code)          | Output (GitHub Copilot) |
 |------------------------------|-------------------------|
 | `haiku`                      | `claude-haiku-4.5`      |
-| `sonnet`                     | `claude-sonnet-4`       |
-| `opus`                       | `claude-opus-4.6-1m`    |
-| `claude-3-5-sonnet-*`        | `claude-sonnet-4`       |
-| `claude-3.5-sonnet-*`        | `claude-sonnet-4`       |
+| `sonnet`                     | `claude-sonnet-5`       |
+| `opus`                       | `claude-opus-4.8`       |
+| `claude-3-5-sonnet-*`        | latest matching Sonnet  |
+| `claude-3.5-sonnet-*`        | latest matching Sonnet  |
 | `claude-3-5-haiku-*`         | `claude-haiku-4.5`      |
 | `claude-3.5-haiku-*`         | `claude-haiku-4.5`      |
-| `claude-3-opus-*`            | `claude-opus-4.6-1m`    |
-| `claude-sonnet-4-*`          | `claude-sonnet-4`       |
-| `claude-opus-4-*`            | `claude-opus-4.6-1m`    |
+| `claude-3-opus-*`            | latest matching Opus    |
+| `claude-sonnet-4-*`          | matching Sonnet 4.x     |
+| `claude-opus-4-*`            | matching Opus 4.x       |
 | `claude-haiku-4-*`           | `claude-haiku-4.5`      |
-| `claude-opus-4`              | `claude-opus-4.6-1m`    |
+| `claude-opus-4`              | matching/latest Opus 4  |
 | `claude-haiku-4`             | `claude-haiku-4.5`      |
-| `claude-opus-4.6*`           | `claude-opus-4.6-1m`    |
-| `claude-sonnet-4.6*`         | `claude-sonnet-4`       |
+| `claude-opus-4.6*`           | `claude-opus-4.6`       |
+| `claude-sonnet-4.6*`         | `claude-sonnet-4.6`     |
+| `claude-sonnet-5*`           | `claude-sonnet-5`       |
 
 ### Global State Structure
 
@@ -304,8 +305,8 @@ Tests use `bun:test` and focus on translation logic validation:
 │  content-type:         application/json                          │
 │  copilot-integration-id: vscode-chat                             │
 │  editor-version:       vscode/${vsCodeVersion}                   │
-│  editor-plugin-version: copilot-chat/0.43.0                      │
-│  user-agent:           GitHubCopilotChat/0.43.0                  │
+│  editor-plugin-version: copilot-chat/0.53.0                      │
+│  user-agent:           GitHubCopilotChat/0.53.0                  │
 │  openai-intent:        conversation-panel                        │
 │  x-github-api-version: 2025-04-01                                │
 │  x-request-id:         ${randomUUID()}                           │
