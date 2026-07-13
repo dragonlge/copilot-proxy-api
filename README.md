@@ -1,5 +1,43 @@
 # Copilot API Proxy for Claude Code and Codex
 
+Use your GitHub Copilot subscription with Claude Code, Codex CLI, and other OpenAI- or Anthropic-compatible clients through one self-hosted proxy.
+
+[![CI](https://github.com/voidsteed/copilot-proxy-api/actions/workflows/ci.yml/badge.svg)](https://github.com/voidsteed/copilot-proxy-api/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/copilot-proxy-api.svg)](https://www.npmjs.com/package/copilot-proxy-api)
+[![npm downloads](https://img.shields.io/npm/dm/copilot-proxy-api.svg)](https://www.npmjs.com/package/copilot-proxy-api)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+
+## Quick Start
+
+With Node.js and an active GitHub Copilot subscription:
+
+```sh
+npx copilot-proxy-api@latest start --claude-code
+```
+
+Complete the GitHub sign-in, choose your models, then paste the generated Claude Code command into a new terminal.
+
+**Client guides:** [Claude Code](#using-with-claude-code) · [Codex CLI](#using-with-codex-cli) · [Generic OpenAI and Anthropic clients](#api-endpoints)
+
+### See It in Action (30 Seconds)
+
+[![30-second animated walkthrough showing Copilot Proxy API with Claude Code and Codex CLI](docs/assets/demo-30s.gif)](docs/assets/demo-30s.mp4)
+
+> [!CAUTION]
+> This is an unofficial, reverse-engineered project. Keep the proxy local, never expose it publicly without authentication, and use it responsibly within [GitHub's Acceptable Use Policies](https://docs.github.com/site-policy/acceptable-use-policies/github-acceptable-use-policies#4-spam-and-inauthentic-activity-on-github) and [Copilot Terms](https://docs.github.com/site-policy/github-terms/github-terms-for-additional-products-and-features#github-copilot).
+
+## Why This Fork?
+
+This fork keeps the original bridge practical for current coding agents:
+
+- Active maintenance for current Copilot models and client compatibility changes.
+- First-class Claude Code support through the Anthropic Messages API and an interactive setup command.
+- Codex CLI support through the OpenAI Responses API.
+- More resilient agent sessions with streaming keepalives, structured error handling, and context management.
+- Built-in usage visibility, quota checks, rate limiting, and manual request approval.
+
+## Responsible Use
+
 > [!WARNING]
 > This is a reverse-engineered proxy of GitHub Copilot API. It is not supported by GitHub, and may break unexpectedly. Use at your own risk.
 
@@ -69,10 +107,6 @@ Known gaps (these reflect Copilot's actual capabilities — they are not bugs to
 - **No Files API, Batches API, `mcp_servers` field, organization headers.** Claude Code does not depend on these for the proxy use case.
 - **No image-only PDFs.** PDF support is text-only via `pdf-parse`. Visual-only PDFs (scans, image-only diagrams) lose their content. For larger / image-heavy PDFs, Claude Code already pre-extracts to images on its side before sending.
 - **No live `api.anthropic.com` tests in CI.** The verify harness (`bun run verify`) is fixture-based and runs offline.
-
-## Demo
-
-https://github.com/user-attachments/assets/7654b383-669d-4eb9-b23c-06d7aefee8c5
 
 ## Prerequisites
 
@@ -297,7 +331,7 @@ After starting the server, a URL to the Copilot Usage Dashboard will be displaye
     npx copilot-proxy-api@latest start
     ```
 2.  The server will output a URL to the usage viewer. Copy and paste this URL into your browser. It will look something like this:
-    `https://voidsteed.github.io/copilot-proxy-api?endpoint=http://localhost:4141/usage`
+    `https://voidsteed.github.io/copilot-proxy-api/dashboard.html?endpoint=http://localhost:4141/usage`
     - If you use the `start.bat` script on Windows, this page will open automatically.
 
 The dashboard provides a user-friendly interface to view your Copilot usage data:
@@ -307,7 +341,7 @@ The dashboard provides a user-friendly interface to view your Copilot usage data
 - **Usage Quotas**: View a summary of your usage quotas for different services like Chat and Completions, displayed with progress bars for a quick overview.
 - **Detailed Information**: See the full JSON response from the API for a detailed breakdown of all available usage statistics.
 - **URL-based Configuration**: You can also specify the API endpoint directly in the URL using a query parameter. This is useful for bookmarks or sharing links. For example:
-  `https://voidsteed.github.io/copilot-proxy-api?endpoint=http://your-api-server/usage`
+  `https://voidsteed.github.io/copilot-proxy-api/dashboard.html?endpoint=http://your-api-server/usage`
 
 ## Using with Claude Code
 

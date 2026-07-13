@@ -119,7 +119,7 @@ export async function runServer(options: RunServerOptions): Promise<void> {
   }
 
   consola.box(
-    `🌐 Usage Viewer: https://voidsteed.github.io/copilot-proxy-api?endpoint=${serverUrl}/usage`,
+    `🌐 Usage Viewer: https://voidsteed.github.io/copilot-proxy-api/dashboard.html?endpoint=${serverUrl}/usage`,
   )
 
   serve({

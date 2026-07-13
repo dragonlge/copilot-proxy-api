@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-labelledby="title description">
+  <title id="title">Copilot Proxy API social preview</title>
+  <desc id="description">A dark Gruvbox-inspired social card for the self-hosted GitHub Copilot proxy supporting Claude Code and Codex CLI.</desc>
+
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1d2021" />
+      <stop offset="1" stop-color="#282828" />
+    </linearGradient>
+    <radialGradient id="glow" cx="78%" cy="42%" r="58%">
+      <stop offset="0" stop-color="#458588" stop-opacity="0.28" />
+      <stop offset="0.5" stop-color="#689d6a" stop-opacity="0.10" />
+      <stop offset="1" stop-color="#1d2021" stop-opacity="0" />
+    </radialGradient>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#665c54" stroke-width="1" opacity="0.15" />
+    </pattern>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="18" stdDeviation="24" flood-color="#000000" flood-opacity="0.35" />
+    </filter>
+  </defs>
+
+  <rect width="1280" height="640" fill="url(#background)" />
+  <rect width="1280" height="640" fill="url(#glow)" />
+  <rect width="1280" height="640" fill="url(#grid)" />
+
+  <rect x="32" y="32" width="1216" height="576" rx="28" fill="none" stroke="#504945" stroke-width="2" />
+
+  <g transform="translate(80 76)">
+    <g aria-label="Project mark">
+      <rect width="46" height="46" rx="13" fill="#8ec07c" />
+      <path d="M12 15h9l5 8h8M12 31h9l5-8" fill="none" stroke="#1d2021" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" />
+      <circle cx="34" cy="23" r="4" fill="#1d2021" />
+    </g>
+    <text x="64" y="20" fill="#ebdbb2" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="17" font-weight="700" letter-spacing="2.4">COPILOT-PROXY-API</text>
+    <text x="64" y="42" fill="#a89984" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="14" font-weight="600" letter-spacing="1.6">OPEN SOURCE · COMPATIBILITY BRIDGE</text>
+  </g>
+
+  <g transform="translate(80 190)">
+    <text fill="#fbf1c7" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="76" font-weight="800" letter-spacing="-2.5">
+      <tspan x="0" y="0">Copilot meets</tspan>
+      <tspan x="0" y="88" fill="#8ec07c">your coding agents.</tspan>
+    </text>
+    <text x="2" y="142" fill="#d5c4a1" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="25" font-weight="500">OpenAI + Anthropic compatible APIs for</text>
+    <text x="2" y="178" fill="#fbf1c7" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="25" font-weight="700">Claude Code and Codex CLI</text>
+  </g>
+
+  <g transform="translate(80 496)" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="15" font-weight="700">
+    <rect width="172" height="42" rx="21" fill="#32302f" stroke="#458588" />
+    <circle cx="23" cy="21" r="5" fill="#83a598" />
+    <text x="38" y="27" fill="#d5c4a1">Responses API</text>
+
+    <g transform="translate(188 0)">
+      <rect width="176" height="42" rx="21" fill="#32302f" stroke="#689d6a" />
+      <circle cx="23" cy="21" r="5" fill="#8ec07c" />
+      <text x="38" y="27" fill="#d5c4a1">Messages API</text>
+    </g>
+
+    <g transform="translate(380 0)">
+      <rect width="147" height="42" rx="21" fill="#32302f" stroke="#d79921" />
+      <circle cx="23" cy="21" r="5" fill="#fabd2f" />
+      <text x="38" y="27" fill="#d5c4a1">Self-hosted</text>
+    </g>
+  </g>
+
+  <g transform="translate(830 126)" filter="url(#shadow)">
+    <rect width="350" height="388" rx="24" fill="#1d2021" stroke="#665c54" stroke-width="2" />
+    <rect x="1" y="1" width="348" height="58" rx="23" fill="#32302f" />
+    <path d="M1 58h348" stroke="#504945" />
+    <circle cx="27" cy="29" r="6" fill="#fb4934" />
+    <circle cx="49" cy="29" r="6" fill="#fabd2f" />
+    <circle cx="71" cy="29" r="6" fill="#b8bb26" />
+    <text x="175" y="35" text-anchor="middle" fill="#a89984" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14">localhost:4141</text>
+
+    <g transform="translate(30 98)" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">
+      <text fill="#8ec07c" font-size="16" font-weight="700">$ npx copilot-proxy-api</text>
+      <text y="43" fill="#a89984" font-size="15">Compatibility routes</text>
+
+      <g transform="translate(0 72)">
+        <path d="M8 0v144" stroke="#504945" stroke-width="2" />
+        <circle cx="8" cy="10" r="7" fill="#83a598" />
+        <circle cx="8" cy="72" r="7" fill="#d3869b" />
+        <circle cx="8" cy="134" r="7" fill="#fabd2f" />
+
+        <text x="30" y="7" fill="#ebdbb2" font-size="16" font-weight="700">Claude Code</text>
+        <text x="30" y="29" fill="#928374" font-size="13">Anthropic Messages</text>
+
+        <text x="30" y="69" fill="#ebdbb2" font-size="16" font-weight="700">Codex CLI</text>
+        <text x="30" y="91" fill="#928374" font-size="13">OpenAI Responses</text>
+
+        <text x="30" y="131" fill="#ebdbb2" font-size="16" font-weight="700">API clients</text>
+        <text x="30" y="153" fill="#928374" font-size="13">Chat · Models · Embeddings</text>
+      </g>
+    </g>
+
+    <rect x="30" y="342" width="290" height="1" fill="#504945" />
+    <circle cx="39" cy="366" r="5" fill="#b8bb26" />
+    <text x="54" y="371" fill="#bdae93" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13">proxy ready</text>
+  </g>
+</svg>
