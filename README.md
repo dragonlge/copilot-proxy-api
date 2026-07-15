@@ -1,6 +1,6 @@
-# Copilot API Proxy for Claude Code and Codex
+# Copilot Proxy API for Claude Code and Codex CLI
 
-Use your GitHub Copilot subscription with Claude Code, Codex CLI, and other OpenAI- or Anthropic-compatible clients through one self-hosted proxy.
+Self-hosted GitHub Copilot bridge for Claude Code and Codex CLI with OpenAI Responses, Anthropic Messages, streaming resilience, and context management.
 
 [![CI](https://github.com/voidsteed/copilot-proxy-api/actions/workflows/ci.yml/badge.svg)](https://github.com/voidsteed/copilot-proxy-api/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/copilot-proxy-api.svg)](https://www.npmjs.com/package/copilot-proxy-api)
@@ -39,21 +39,9 @@ This fork keeps the original bridge practical for current coding agents:
 ## Responsible Use
 
 > [!WARNING]
-> This is a reverse-engineered proxy of GitHub Copilot API. It is not supported by GitHub, and may break unexpectedly. Use at your own risk.
-
-> [!WARNING]
-> **GitHub Security Notice:**  
-> Excessive automated or scripted use of Copilot (including rapid or bulk requests, such as via automated tools) may trigger GitHub's abuse-detection systems.  
-> You may receive a warning from GitHub Security, and further anomalous activity could result in temporary suspension of your Copilot access.
+> `copilot-proxy-api` is an unofficial compatibility project. It is not affiliated with or supported by GitHub, and Copilot API changes may break it without notice.
 >
-> GitHub prohibits use of their servers for excessive automated bulk activity or any activity that places undue burden on their infrastructure.
->
-> Please review:
->
-> - [GitHub Acceptable Use Policies](https://docs.github.com/site-policy/acceptable-use-policies/github-acceptable-use-policies#4-spam-and-inauthentic-activity-on-github)
-> - [GitHub Copilot Terms](https://docs.github.com/site-policy/github-terms/github-terms-for-additional-products-and-features#github-copilot)
->
-> Use this proxy responsibly to avoid account restrictions.
+> Keep the proxy private, require `--api-key` for non-local access, and avoid rapid or bulk automation. Activity that triggers GitHub's abuse controls may restrict or suspend Copilot access. Review [GitHub's Acceptable Use Policies](https://docs.github.com/site-policy/acceptable-use-policies/github-acceptable-use-policies#4-spam-and-inauthentic-activity-on-github) and [Copilot Terms](https://docs.github.com/site-policy/github-terms/github-terms-for-additional-products-and-features#github-copilot).
 
 ## Credits
 
@@ -61,13 +49,13 @@ This project is a fork of [copilot-api](https://github.com/ericc-ch/copilot-api)
 
 ---
 
-**Note:** If you are using [opencode](https://github.com/sst/opencode), you do not need this project. Opencode supports GitHub Copilot provider out of the box.
+**Using OpenCode?** Its built-in [GitHub Copilot provider](https://github.com/sst/opencode) may remove the need for this proxy.
 
 ---
 
 ## Project Overview
 
-A reverse-engineered proxy for the GitHub Copilot API that exposes it as an OpenAI and Anthropic compatible service. This allows you to use GitHub Copilot with any tool that supports the OpenAI Chat Completions API or the Anthropic Messages API, including to power [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview).
+`copilot-proxy-api` translates the API shapes used by coding agents into GitHub Copilot requests. It supports OpenAI Chat Completions and Responses plus Anthropic Messages, with compatibility work centered on Claude Code, Codex CLI, and long-running agent sessions.
 
 ## Features
 
@@ -378,9 +366,7 @@ Here is an example `.claude/settings.json` file:
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
   },
   "permissions": {
-    "deny": [
-      "WebSearch"
-    ]
+    "deny": ["WebSearch"]
   }
 }
 ```
