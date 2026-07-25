@@ -15,6 +15,29 @@ const readGithubToken = () => fs.readFile(PATHS.GITHUB_TOKEN_PATH, "utf8")
 const writeGithubToken = (token: string) =>
   fs.writeFile(PATHS.GITHUB_TOKEN_PATH, token)
 
+let copilotTokenRefresh: Promise<string> | undefined
+
+export function refreshCopilotToken(staleToken?: string): Promise<string> {
+  if (staleToken && state.copilotToken && state.copilotToken !== staleToken) {
+    return Promise.resolve(state.copilotToken)
+  }
+
+  copilotTokenRefresh ??= getCopilotToken()
+    .then(({ token }) => {
+      state.copilotToken = token
+      consola.debug("Copilot token refreshed")
+      if (state.showToken) {
+        consola.info("Refreshed Copilot token:", token)
+      }
+      return token
+    })
+    .finally(() => {
+      copilotTokenRefresh = undefined
+    })
+
+  return copilotTokenRefresh
+}
+
 export const setupCopilotToken = async () => {
   const { token, refresh_in } = await getCopilotToken()
   state.copilotToken = token
@@ -30,12 +53,7 @@ export const setupCopilotToken = async () => {
   const refreshWithRetry = async (maxRetries = 5, baseDelay = 1000) => {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        const { token } = await getCopilotToken()
-        state.copilotToken = token
-        consola.debug("Copilot token refreshed")
-        if (state.showToken) {
-          consola.info("Refreshed Copilot token:", token)
-        }
+        await refreshCopilotToken()
         return // Success, exit retry loop
       } catch (error) {
         consola.error(

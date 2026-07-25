@@ -1,5 +1,6 @@
 import consola from "consola"
 
+import { refreshCopilotToken } from "./token"
 import { sleep } from "./utils"
 
 const DEFAULT_ATTEMPTS = 3
@@ -22,11 +23,16 @@ export async function copilotFetch(
   } = options
   const bodyLength = typeof init.body === "string" ? init.body.length : 0
   const requestLabel = formatRequestLabel(url, init.method)
+  let canRefreshAuth = true
 
   let lastError: unknown
   for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
-      const response = await fetch(url, init)
+      let response = await fetch(url, init)
+      if (canRefreshAuth && isAuthFailure(response)) {
+        canRefreshAuth = false
+        response = await retryWithRefreshedToken(url, init, response)
+      }
       if (!shouldRetryResponse(response, bodyLength) || attempt === attempts) {
         return response
       }
@@ -53,6 +59,41 @@ export async function copilotFetch(
   throw lastError instanceof Error ? lastError : (
       new Error("Copilot request failed")
     )
+}
+
+function isAuthFailure(response: Response): boolean {
+  return response.status === 401 || response.status === 403
+}
+
+async function retryWithRefreshedToken(
+  url: string,
+  init: RequestInit,
+  response: Response,
+): Promise<Response> {
+  const staleToken = getBearerToken(init.headers)
+  const requestLabel = formatRequestLabel(url, init.method)
+
+  try {
+    const token = await refreshCopilotToken(staleToken)
+    const headers = new Headers(init.headers)
+    headers.set("Authorization", `Bearer ${token}`)
+    init.headers = headers
+    consola.warn(
+      `Copilot ${requestLabel} returned ${response.status}; refreshed token and retrying`,
+    )
+    return await fetch(url, init)
+  } catch (error) {
+    consola.warn(
+      `Copilot token refresh failed after ${requestLabel} returned ${response.status}: ${formatErrorMessage(error)}`,
+    )
+    return response
+  }
+}
+
+function getBearerToken(headers: RequestInit["headers"]): string | undefined {
+  const authorization = new Headers(headers).get("Authorization")
+  if (!authorization?.toLowerCase().startsWith("bearer ")) return undefined
+  return authorization.slice(7)
 }
 
 function formatRequestLabel(url: string, method: string | undefined): string {

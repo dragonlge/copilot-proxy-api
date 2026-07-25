@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, mock, test } from "bun:test"
 
 import { copilotFetch } from "~/lib/copilot-fetch"
+import { state } from "~/lib/state"
 
 afterEach(() => {
   mock.restore()
+  state.copilotToken = undefined
+  state.githubToken = undefined
 })
 
 describe("copilotFetch", () => {
@@ -55,6 +58,37 @@ describe("copilotFetch", () => {
 
     expect(response.status).toBe(200)
     expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  test("refreshes a rejected Copilot token and retries once", async () => {
+    state.copilotToken = "stale-token"
+    state.githubToken = "github-token"
+
+    const fetchMock = mock((url: string, init?: RequestInit) => {
+      if (url.includes("/copilot_internal/v2/token")) {
+        return Response.json({ token: "fresh-token" })
+      }
+
+      const authorization = new Headers(init?.headers).get("Authorization")
+      if (authorization === "Bearer stale-token") {
+        return new Response("forbidden", { status: 403 })
+      }
+      return new Response("ok", { status: 200 })
+    })
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+
+    const response = await copilotFetch(
+      "https://api.githubcopilot.com/responses",
+      {
+        method: "POST",
+        headers: { Authorization: "Bearer stale-token" },
+        retryDelayMs: 0,
+      },
+    )
+
+    expect(response.status).toBe(200)
+    expect(state.copilotToken).toBe("fresh-token")
+    expect(fetchMock).toHaveBeenCalledTimes(3)
   })
 
   test("does not retry likely context-overflow timeout throws", async () => {
