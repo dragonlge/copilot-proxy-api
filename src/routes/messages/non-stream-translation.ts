@@ -176,8 +176,10 @@ function documentHeader(block: AnthropicDocumentBlock): string {
 const MODEL_NAME_FALLBACK: Record<string, string> = {
   haiku: "claude-haiku-4.5",
   sonnet: "claude-sonnet-5",
-  opus: "claude-opus-4.8",
+  opus: "claude-opus-5",
 }
+
+const LEGACY_OPUS_FALLBACK = "claude-opus-4.8"
 
 const CLAUDE_FAMILIES = ["opus", "sonnet", "haiku"] as const
 type ClaudeFamily = (typeof CLAUDE_FAMILIES)[number]
@@ -204,11 +206,19 @@ function parseCopilotVersion(id: string): [number, number] {
   return [Number(match[1]), match[2] ? Number(match[2]) : 0]
 }
 
-/** Pick the best Copilot model in a family from state.models.
+/** Pick the best Copilot model in a family (and optionally a major version).
  *  Highest version wins; among equal versions, prefer the `-1m` variant. */
-function pickLatestCopilotModel(family: ClaudeFamily): string | null {
+function pickLatestCopilotModel(
+  family: ClaudeFamily,
+  majorVersion?: number,
+): string | null {
   const candidates =
-    state.models?.data.filter((m) => m.id.toLowerCase().includes(family)) ?? []
+    state.models?.data.filter(
+      (m) =>
+        m.id.toLowerCase().includes(family)
+        && (majorVersion === undefined
+          || parseCopilotVersion(m.id)[0] === majorVersion),
+    ) ?? []
   if (candidates.length === 0) return null
 
   let best = candidates[0]
@@ -250,6 +260,19 @@ function isCopilotClaudeModelId(model: string): boolean {
     )
   if (!match) return false
   return Boolean(match[2]) || Number(match[1]) >= 5
+}
+
+function unadvertisedClaudeModelFallback(
+  model: string,
+  family: ClaudeFamily,
+  version: [number, number],
+): string | null {
+  if (family === "opus" && version[0] === 5 && version[1] === 0) {
+    return MODEL_NAME_FALLBACK.opus
+  }
+  if (family === "opus" && version[0] === 4) return LEGACY_OPUS_FALLBACK
+  if (!state.models && isCopilotClaudeModelId(model)) return model
+  return null
 }
 
 /** Pick the Copilot model matching the user-requested Claude version.
@@ -312,7 +335,14 @@ function translateModelName(model: string): string {
     if (requestedVersion) {
       const matching = pickMatchingCopilotModel(family, requestedVersion)
       if (matching) return matching
-      if (!state.models && isCopilotClaudeModelId(model)) return model
+      const sameMajor = pickLatestCopilotModel(family, requestedVersion[0])
+      if (sameMajor) return sameMajor
+      const fallback = unadvertisedClaudeModelFallback(
+        model,
+        family,
+        requestedVersion,
+      )
+      if (fallback) return fallback
     }
 
     const latest = pickLatestCopilotModel(family)

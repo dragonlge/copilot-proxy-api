@@ -256,7 +256,7 @@ Tests use `bun:test` and focus on translation logic validation:
 |------------------------------|-------------------------|
 | `haiku`                      | `claude-haiku-4.5`      |
 | `sonnet`                     | `claude-sonnet-5`       |
-| `opus`                       | `claude-opus-4.8`       |
+| `opus`                       | `claude-opus-5`         |
 | `claude-3-5-sonnet-*`        | latest matching Sonnet  |
 | `claude-3.5-sonnet-*`        | latest matching Sonnet  |
 | `claude-3-5-haiku-*`         | `claude-haiku-4.5`      |
@@ -268,6 +268,7 @@ Tests use `bun:test` and focus on translation logic validation:
 | `claude-opus-4`              | matching/latest Opus 4  |
 | `claude-haiku-4`             | `claude-haiku-4.5`      |
 | `claude-opus-4.6*`           | `claude-opus-4.6`       |
+| `claude-opus-5*`             | `claude-opus-5`         |
 | `claude-sonnet-4.6*`         | `claude-sonnet-4.6`     |
 | `claude-sonnet-5*`           | `claude-sonnet-5`       |
 

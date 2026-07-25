@@ -360,7 +360,7 @@ Here is an example `.claude/settings.json` file:
   "env": {
     "ANTHROPIC_BASE_URL": "http://localhost:4141/",
     "ANTHROPIC_AUTH_TOKEN": "dummy",
-    "ANTHROPIC_MODEL": "claude-opus-4.8",
+    "ANTHROPIC_MODEL": "claude-opus-5",
     "ANTHROPIC_SMALL_FAST_MODEL": "claude-sonnet-5",
     "DISABLE_NON_ESSENTIAL_MODEL_CALLS": "1",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
@@ -371,7 +371,9 @@ Here is an example `.claude/settings.json` file:
 }
 ```
 
-> **Note:** The recommended heavy model is `claude-opus-4.8`; the recommended small/fast model is `claude-sonnet-5`. Both currently report a 1M context window through Copilot.
+> **Note:** The recommended heavy model is `claude-opus-5`; the recommended small/fast model is `claude-sonnet-5`. Both currently report a 1M context window through Copilot.
+> [Opus 5 is rolling out gradually](https://github.blog/changelog/2026-07-24-claude-opus-5-is-now-available-in-github-copilot/) to Copilot Pro+, Max, Business, and Enterprise plans. Business and Enterprise administrators must also enable its model policy. If it is absent from `/v1/models`, use another advertised model until GitHub enables it for your account.
+> Native Opus 5 support requires [Claude Code 2.1.219 or later](https://code.claude.com/docs/en/model-config#model-aliases); run `claude update` before selecting it.
 
 You can find more options here: [Claude Code settings](https://docs.anthropic.com/en/docs/claude-code/settings#environment-variables)
 

@@ -22,16 +22,16 @@ describe("models route", () => {
       object: "list",
       data: [
         {
-          id: "claude-opus-4.8",
+          id: "claude-opus-5",
           object: "model",
-          name: "Claude Opus 4.8",
+          name: "Claude Opus 5",
           model_picker_enabled: true,
           preview: false,
           vendor: "anthropic",
           version: "1",
           supported_endpoints: ["/chat/completions"],
           capabilities: {
-            family: "claude-opus-4.8",
+            family: "claude-opus-5",
             limits: {},
             object: "model_capabilities",
             supports: {

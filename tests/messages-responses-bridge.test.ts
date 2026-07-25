@@ -59,21 +59,27 @@ function setModels(models: Array<{ endpoints?: Array<string>; id: string }>) {
 
 describe("Messages Responses bridge", () => {
   test("opens streaming SSE before Copilot returns response headers", async () => {
-    setModels([{ id: "claude-opus-4.8", endpoints: ["/chat/completions"] }])
+    setModels([{ id: "claude-opus-5", endpoints: ["/chat/completions"] }])
     const app = createApp()
 
     let resolveFetch: ((response: Response) => void) | undefined
     const upstreamResponse = new Promise<Response>((resolve) => {
       resolveFetch = resolve
     })
-    const fetchMock = mock(() => upstreamResponse)
+    const fetchMock = mock((url: string, options: RequestInit) => {
+      expect(url).toBe("https://api.githubcopilot.com/chat/completions")
+      expect(JSON.parse(options.body as string)).toMatchObject({
+        model: "claude-opus-5",
+      })
+      return upstreamResponse
+    })
     globalThis.fetch = fetchMock as unknown as typeof fetch
 
     const responsePromise = Promise.resolve(
       app.request("/v1/messages", {
         method: "POST",
         body: JSON.stringify({
-          model: "claude-opus-4.8",
+          model: "claude-opus-5",
           max_tokens: 100,
           stream: true,
           messages: [{ role: "user", content: "hello" }],
