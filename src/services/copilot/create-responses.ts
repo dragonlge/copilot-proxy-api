@@ -43,10 +43,7 @@ export async function createResponses(
 ): Promise<Response> {
   if (!state.copilotToken) throw new Error("Copilot token not found")
 
-  const upstreamPayload = fitResponsesPayload(
-    sanitizeResponsesPayload(payload),
-    computeResponsesPayloadCeiling(payload.model),
-  )
+  const upstreamPayload = prepareResponsesPayload(payload)
   const body = JSON.stringify(upstreamPayload)
   const headers: Record<string, string> = {
     ...copilotHeaders(state, responsesPayloadHasImages(upstreamPayload)),
@@ -62,6 +59,9 @@ export async function createResponses(
     method: "POST",
     headers,
     body,
+    // Replaying the same large body after an upstream body-read timeout only
+    // adds several minutes of latency. Let the caller compact or bridge it.
+    attempts: body.length >= 400_000 ? 1 : undefined,
   })
 
   if (!response.ok) {
@@ -113,6 +113,23 @@ export async function createResponses(
   }
 
   return response
+}
+
+/**
+ * Return the exact bounded payload used for both native Responses and the
+ * Responses-via-Chat compatibility path. Keeping this shared prevents the
+ * fallback from translating the original, image-heavy Codex request back into
+ * a larger Chat Completions body.
+ */
+export function prepareResponsesPayload(
+  payload: ResponsesApiRequest,
+  maximumBytes?: number,
+): ResponsesApiRequest {
+  const modelCeiling = computeResponsesPayloadCeiling(payload.model)
+  return fitResponsesPayload(
+    sanitizeResponsesPayload(payload),
+    Math.min(modelCeiling, maximumBytes ?? modelCeiling),
+  )
 }
 
 function fitResponsesPayload(

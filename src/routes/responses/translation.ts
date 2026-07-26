@@ -37,12 +37,7 @@ export function translateResponsesToChat(
       content: request.input,
     })
   } else if (Array.isArray(request.input)) {
-    for (const item of request.input) {
-      const message = translateInputItem(item)
-      if (message) {
-        messages.push(message)
-      }
-    }
+    appendTranslatedInput(messages, request.input)
   }
 
   // Translate tools
@@ -80,6 +75,44 @@ export function translateResponsesToChat(
     tool_choice: toolChoice,
     thinking,
   }
+}
+
+function appendTranslatedInput(
+  messages: Array<Message>,
+  input: Array<ResponsesInputItem>,
+): void {
+  let pendingToolCalls: Array<NonNullable<Message["tool_calls"]>[number]> = []
+  const flushToolCalls = () => {
+    if (pendingToolCalls.length === 0) return
+    messages.push({
+      role: "assistant",
+      content: null,
+      tool_calls: pendingToolCalls,
+    })
+    pendingToolCalls = []
+  }
+
+  for (const item of input) {
+    if (item.type === "function_call" && item.call_id && item.name) {
+      pendingToolCalls.push({
+        id: item.call_id,
+        type: "function",
+        function: {
+          name: item.name,
+          arguments: item.arguments ?? "{}",
+        },
+      })
+      continue
+    }
+    // Reasoning records can appear between parallel calls. They are not Chat
+    // messages and must not split one assistant tool-call turn.
+    if (item.type === "reasoning" || item.type === "compaction") continue
+
+    flushToolCalls()
+    const message = translateInputItem(item)
+    if (message) messages.push(message)
+  }
+  flushToolCalls()
 }
 
 function translateInputItem(item: ResponsesInputItem): Message | null {
@@ -194,13 +227,15 @@ function translateTools(
 
   const result: Array<Tool> = []
   for (const tool of tools) {
-    if (tool.type === "function" && tool.function) {
+    if (tool.type === "function") {
+      const name = tool.function?.name ?? tool.name
+      if (!name) continue
       result.push({
         type: "function",
         function: {
-          name: tool.function.name,
-          description: tool.function.description,
-          parameters: tool.function.parameters ?? {},
+          name,
+          description: tool.function?.description ?? tool.description,
+          parameters: tool.function?.parameters ?? tool.parameters ?? {},
         },
       })
     }

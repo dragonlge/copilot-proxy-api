@@ -173,6 +173,41 @@ describe("Responses API to Chat Completions translation", () => {
     )
   })
 
+  test("should translate Responses top-level function tools used by Codex", () => {
+    const responsesPayload: ResponsesApiRequest = {
+      model: "gpt-5-mini",
+      input: "What's the weather?",
+      tools: [
+        {
+          type: "function",
+          name: "get_weather",
+          description: "Get current weather",
+          parameters: {
+            type: "object",
+            properties: { city: { type: "string" } },
+            required: ["city"],
+          },
+        },
+      ],
+    }
+
+    const chatPayload = translateResponsesToChat(responsesPayload)
+    expect(chatPayload.tools).toEqual([
+      {
+        type: "function",
+        function: {
+          name: "get_weather",
+          description: "Get current weather",
+          parameters: {
+            type: "object",
+            properties: { city: { type: "string" } },
+            required: ["city"],
+          },
+        },
+      },
+    ])
+  })
+
   test("should translate tool_choice string values", () => {
     const responsesPayload: ResponsesApiRequest = {
       model: "gpt-5.2",

@@ -3,7 +3,10 @@ import { afterEach, expect, mock, test } from "bun:test"
 import type { ResponsesApiRequest } from "~/routes/responses/types"
 
 import { state } from "~/lib/state"
-import { createResponses } from "~/services/copilot/create-responses"
+import {
+  createResponses,
+  prepareResponsesPayload,
+} from "~/services/copilot/create-responses"
 
 state.copilotToken = "test-token"
 state.vsCodeVersion = "1.0.0"
@@ -45,6 +48,21 @@ function bodyToString(body: unknown): string {
   }
   return body
 }
+
+test("honors a stricter Responses-via-Chat payload ceiling", () => {
+  const payload: ResponsesApiRequest = {
+    model: "claude-sonnet-4.6",
+    input: Array.from({ length: 10 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: `Turn ${index}\n${"x".repeat(80_000)}`,
+    })),
+  }
+
+  const prepared = prepareResponsesPayload(payload, 400_000)
+
+  expect(JSON.stringify(prepared).length).toBeLessThanOrEqual(400_000)
+  expect(JSON.stringify(prepared.input)).toContain("Turn 9")
+})
 
 test("strips old Responses images when payload exceeds upstream byte limit", async () => {
   const imageUrl = `data:image/png;base64,${"a".repeat(1_000_000)}`

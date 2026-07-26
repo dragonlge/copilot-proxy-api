@@ -13,6 +13,7 @@ import { state } from "~/lib/state"
 /* eslint-disable complexity */
 export const createChatCompletions = async (
   payload: ChatCompletionsPayload,
+  options: { attempts?: number } = {},
 ) => {
   if (!state.copilotToken) throw new Error("Copilot token not found")
 
@@ -43,6 +44,7 @@ export const createChatCompletions = async (
       method: "POST",
       headers,
       body,
+      attempts: options.attempts,
     })
   } catch (error) {
     if (isLikelyContextOverflowTimeout(error, body.length)) {
