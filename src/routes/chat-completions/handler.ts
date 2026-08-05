@@ -39,7 +39,10 @@ export async function handleCompletion(c: Context) {
 
   if (state.manualApprove) await awaitApproval()
 
-  if (isNullish(payload.max_tokens)) {
+  // Only inject max_tokens if neither max_tokens nor max_completion_tokens
+  // is set. GPT-5.x / o-series models use max_completion_tokens and reject
+  // max_tokens — injecting both causes HTTP 400 "cannot both be set".
+  if (isNullish(payload.max_tokens) && isNullish(payload.max_completion_tokens)) {
     payload = {
       ...payload,
       max_tokens: selectedModel?.capabilities.limits.max_output_tokens,
